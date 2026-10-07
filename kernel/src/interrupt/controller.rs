@@ -236,6 +236,11 @@ unsafe fn outb(port: u16, val: u8) {
     }
 }
 
+/// 主片命令端口（仅做常量语义占位，便于统一 PIC 口语义引用）。
+pub const PIC1_CMD_PORT: u16 = PIC1_CMD;
+/// 从片命令端口（仅做常量语义占位，便于统一 PIC 口语义引用）。
+pub const PIC2_CMD_PORT: u16 = PIC2_CMD;
+
 // 不再在此模块使用 inb；仅 outb 对 PIC 初始化与 EOI 已足够。
 // 若后续需要轮询 PIC 状态，可在此补充 inb。
 

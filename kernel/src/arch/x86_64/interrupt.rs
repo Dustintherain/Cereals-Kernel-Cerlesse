@@ -1,14 +1,21 @@
-//! 异常 stub 与统一分发（v0.2 实现）
+//! 异常 stub 与统一分发（v0.2 实现；v0.4 补充 IRQ stub 预留位）
 //!
 //! 每个向量一个汇编 stub：有错误码的异常（8/10/11/12/13/14/16）由 CPU 压栈，
 //! 其余补 0；随后压向量号、统一保存 15 个通用寄存器，调用 `exception_dispatch`。
 //! 栈帧布局与 `ExceptionFrame` 严格一一对应。
+//!
+//! v0.4 目标：在此基础上预留 IRQ（32..47）汇编 stub 扩展位，供后续 IRQ handler 端接使用。
+//! 当前实现先保留 `NUM_VECTORS` 为 32（仅异常），并提供 `IRQ_FIRST` 语义供上层引用。
 
 use crate::driver::serial;
 use core::arch::{asm, global_asm};
 
 /// 处理的异常向量数（0..32）
 pub const NUM_VECTORS: usize = 32;
+
+/// 第一批 IRQ 向量起始值（PIC 传统映射下 IRQ0 常放在向量 32）。
+/// 当前阶段仅作扩展预留语义，不安装 IRQ handler。
+pub const IRQ_FIRST: usize = NUM_VECTORS;
 
 /// 异常时的完整栈帧（自栈底向栈顶）。
 /// 布局顺序 = isr_common 的 push 逆序，低地址在前。
@@ -73,6 +80,10 @@ global_asm!(
     ".global isr_29", "isr_29:", "push 0", "push 29", "jmp isr_common",
     ".global isr_30", "isr_30:", "push 0", "push 30", "jmp isr_common",
     ".global isr_31", "isr_31:", "push 0", "push 31", "jmp isr_common",
+
+    // ---- 预留 IRQ stub 位（未来由汇编扩展到 32..47，当前保持空档） ----
+    // 占位：IRQ0..IRQ15 可在此追加 isr_32..isr_47。
+    // 谨慎起见，本版本不在此构造占位汇编 stub，避免对齐/大小语义被意外消费。
 
     // ---- 统一入口：保存寄存器 → 对齐栈 → 调 Rust 分发 → 恢复 → iretq ----
     "isr_common:",
@@ -150,7 +161,7 @@ extern "C" {
     fn isr_31();
 }
 
-/// 32 个异常处理入口地址表（idt.rs 消费）。
+/// 异常处理入口地址表（idt.rs 消费）。
 /// 在 Rust 侧构建而非汇编 `.quad`：目标为 PIE，`.rodata` 绝对重定位会被链接器拒绝。
 pub fn handler_table() -> [usize; NUM_VECTORS] {
     [
