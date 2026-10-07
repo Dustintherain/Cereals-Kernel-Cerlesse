@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["shared", "boot", "kernel"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+lto = true

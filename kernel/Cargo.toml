@@ -1,0 +1,11 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shared = { path = "../shared" }
+
+[features]
+# v0.2 异常注入测试：构建后在启动末尾故意触发 #DE（make test-exception）
+exception-test = []

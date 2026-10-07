@@ -1,0 +1,7 @@
+# 内核目标配置
+#
+# x86_64-unknown-none 默认 PIE：绝对地址（如函数地址表）放进 .data/.rodata 后
+# 依赖 .rela.dyn 的 R_X86_64_RELATIVE 加载时重定位，而我们的 bootloader 不处理
+# 动态重定位段（内核固定装载在链接地址 32MiB，ADR-007），因此强制静态非 PIE。
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=static"]
