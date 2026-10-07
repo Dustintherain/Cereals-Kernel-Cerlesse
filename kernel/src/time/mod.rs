@@ -1,0 +1,38 @@
+//! 时间子系统（v0.4 起，优先 PIT tick 路径）
+//!
+//! 当前阶段的目标是建立最小可验证的时钟语义：
+//! 1. PIT（8253/8254）产生周期性电脑计时中断（IRQ0）。
+//! 2. 内核维护一个物理 tick 计数与简单 monotonic 语义。
+//! 3. 后续再抽象为更高分辨率时钟源与休眠/超时支持。
+//!
+//! 约定：
+//! - PIT 文件寄存器：0x40
+//! - PIT 命令端口：0x43
+//! - IRQ0 经 PIC 映射为向量 `interrupt::controller::IRQ_BASE_VECTOR`
+//!
+//! TODO(v0.4):
+//! - PIT 参数配置（模式 3、期望频率/间隔）
+//! - IRQ0 handler 端接（EOI + tick 递增）
+//! - 简单 ktime/tick API
+//! - 可选：后续切换为 APIC timer 时在此抽象时钟源
+
+#![allow(dead_code)]
+
+pub mod clock;
+pub mod timer;
+
+use crate::interrupt::controller;
+
+/// 当前时间子系统使用的中断控制器视图（仅用于 IRQ0 处理中的 EOI 与可能的屏蔽操作）。
+/// 真实实现中，这一句柄通常由全局控制器引用或单例提供；此处先保留接口意图。
+pub struct TimeCtrl<'a> {
+    pub controller: &'a mut controller::Controller,
+}
+
+impl TimeCtrl<'_> {
+    /// 从 IRQ0 向量执行最小 EOI 语义。
+    pub unsafe fn handle_irq0(&mut self, vector: u8) {
+        // IRQ0 是 master IRQ0，属于 slave 范围之外，因此仅需主片 EOI。
+        self.controller.eoi_with_vector(vector);
+    }
+}
