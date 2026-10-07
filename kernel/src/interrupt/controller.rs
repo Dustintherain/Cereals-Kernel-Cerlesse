@@ -126,6 +126,8 @@ impl Controller {
     }
 
     /// 启用某 IRQ（先取消屏蔽，再同步写两片 mask）。
+    ///
+    /// 注意：这仅修改 PIC mask。处理器中断使能（IF）与否由架构层决定。
     pub fn enable_irq(&mut self, irq: u8) {
         if irq >= 16 {
             return;
@@ -179,6 +181,11 @@ impl fmt::Debug for Controller {
 /// IRQ 向量映射示例（PIC 传统做法：IRQ0 → 向量 32，随后顺延）。
 /// 这里先写死一个常见映射，便于后续对齐文档里的“IRQ 分发”语义。
 pub const IRQ_BASE_VECTOR: u8 = 32;
+
+/// 返回 IRQ0 对应的向量号（PIC 映射下恒为 `IRQ_BASE_VECTOR`）。
+pub const fn irq0_vector() -> u8 {
+    IRQ_BASE_VECTOR
+}
 
 pub const fn irq_to_vector(irq: u8) -> Option<u8> {
     if irq < 16 {

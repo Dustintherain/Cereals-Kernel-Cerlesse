@@ -81,7 +81,31 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
                 "PIT channel0 configured; IRQ0 enabled on PIC",
             );
         }
+
+        // v0.4 延伸2：演示 IRQ 分发预留入口存在（尚未真正接通中断递交）。
+        // 这里只是调用一次 `irq_dispatch` 占位函数，表达后续流式分发意图。
+        unsafe {
+            interrupt::irq::irq_dispatch(
+                interrupt::controller::irq0_vector(),
+            );
+        }
+        arch::x86_64::mark_irq0_dispatch_placeholder_called();
+        driver::serial::println(
+            "irq_dispatch(IRQ0) placeholder invoked",
+        );
     }
+
+    // v0.4 延伸2（补充）：再次调用 IRQ 分发预留入口，表达后续占位流式分发意图。
+    unsafe {
+        interrupt::irq::irq_dispatch(
+            interrupt::controller::irq0_vector(),
+        );
+    }
+    interrupt::irq::mark_irq_dispatch_placeholder_called();
+    driver::serial::println(
+        "irq_dispatch(IRQ0) placeholder invoked again",
+    );
+
 
     if boot_info.is_null() {
         driver::serial::println("panic: null BootInfo");
@@ -108,6 +132,14 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
     }
 
     driver::serial::println("Kernel started!");
+
+    // v0.4 延伸2：简单观测当前 IF 状态（仅用于启动日志，不作为中断递交判断依据）。
+    {
+        let enabled = arch::x86_64::irqs_enabled();
+        driver::serial::print("IF=");
+        driver::serial::print_dec(if enabled { 1u64 } else { 0u64 });
+        driver::serial::println("");
+    }
 
     // v0.2 验收：异常注入测试（feature 门控，默认构建不触发）
     #[cfg(feature = "exception-test")]

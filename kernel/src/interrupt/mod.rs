@@ -21,3 +21,4 @@ pub mod irq;
 // - 中断控制器 PIC 第一版已接入启动链（初始化后默认全屏蔽）
 // - 中断基建快照见 `kernel/src/interrupt/doc CONTRIBUTING_CHAIN.md`（当前仅作为上下文占位）
 // - v0.4 延伸：已接入 PIT/tick 子系统雏形（timer/clock），并在 main 中启用 IRQ0 示例使能
+// - v0.4 延伸2：准备 IRQ0 handler 端接 + IF 打开（尚未真正递交中断）
