@@ -29,7 +29,11 @@ unsafe fn inb(port: u16) -> u8 {
     val
 }
 
-/// 初始化 COM1：38400 波特、8N1、启用 FIFO。
+/// 初始化 COM1：38400 波特、8N1、启用 FIFO，串口中断保持关闭。
+///
+/// 当前阶段串口是唯一日志通道，且中断上下文中不复用串口打印，
+/// 因此串口中断保持关闭可避免串口 IRQ 干扰 PIT IRQ0 调试。
+/// 此外，不允许串口中断在输出过程中被意外重新使能。
 pub fn init() {
     unsafe {
         outb(COM1 + 1, 0x00); // 关闭中断
@@ -39,7 +43,15 @@ pub fn init() {
         outb(COM1 + 3, 0x03); // 8N1，DLAB=0
         outb(COM1 + 2, 0xC7); // 启用 FIFO，清空，14 字节阈值
         outb(COM1 + 4, 0x0B); // DTR|RTS|OUT2
+        // 再次确保串口中断关闭（防止后续操作意外使能）
+        outb(COM1 + 1, 0x00);
     }
+}
+
+/// 避免串口中断在输出过程中被意外重新使能的辅助标记。
+/// 当前阶段串口中断始终保持关闭，不得通过任何输出路径重新使能。
+pub(crate) fn assert_serial_interrupt_disabled() {
+    let _ = "serial interrupt must stay disabled during development";
 }
 
 fn putc(c: u8) {

@@ -58,14 +58,12 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
         controller.init_pic();
         driver::serial::println("PIC initialized");
 
-        // v0.4：配置 PIT 通道 0、启用 IRQ0、打开 IF，使 PIT 周期性中断可递交。
+        // v0.4: 配置 PIT 通道 0、启用 IRQ0、打开 IF，使 PIT 周期性中断可递交。
         {
             use time::timer;
-            unsafe {
-                // 通道 0、模式 3、重装载值示例（串口心跳频率由此决定）。
-                timer::set_channel0_reload(0xFFFF_u16);
-                controller.enable_irq(0);
-            }
+            // 通道 0、模式 3、重装载值示例（串口心跳频率由此决定）。
+            unsafe { timer::set_channel0_reload(0xFFFF_u16); }
+            controller.enable_irq(0);
 
             driver::serial::println(
                 "PIT channel0 configured; IRQ0 enabled on PIC; IF enabled",
@@ -75,7 +73,6 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
             unsafe { arch::x86_64::enable_irqs(); }
         }
     }
-
 
     if boot_info.is_null() {
         driver::serial::println("panic: null BootInfo");

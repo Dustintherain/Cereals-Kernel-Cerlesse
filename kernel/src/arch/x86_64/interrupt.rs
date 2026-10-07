@@ -7,6 +7,7 @@
 //! v0.4 目标：在此基础上预留 IRQ（32..47）汇编 stub 扩展位，供后续 IRQ handler 端接使用。
 //! 当前实现先保留 `NUM_VECTORS` 为 32（仅异常），并提供 `IRQ_FIRST` 语义供上层引用。
 
+use crate::arch::x86_64::idt::IDT_SIZE;
 use crate::driver::serial;
 use core::arch::{asm, global_asm};
 
@@ -14,7 +15,7 @@ use core::arch::{asm, global_asm};
 pub const NUM_VECTORS: usize = 32;
 
 /// 第一批 IRQ 向量起始值（PIC 传统映射下 IRQ0 常放在向量 32）。
-/// 当前阶段仅作扩展预留语义，不安装 IRQ handler。
+/// 当前阶段对齐 `arch::x86_64::idt::IRQ_FIRST`，供上层一致引用。
 pub const IRQ_FIRST: usize = NUM_VECTORS;
 
 /// 异常时的完整栈帧（自栈底向栈顶）。
@@ -81,9 +82,62 @@ global_asm!(
     ".global isr_30", "isr_30:", "push 0", "push 30", "jmp isr_common",
     ".global isr_31", "isr_31:", "push 0", "push 31", "jmp isr_common",
 
-    // ---- 预留 IRQ stub 位（未来由汇编扩展到 32..47，当前保持空档） ----
-    // 占位：IRQ0..IRQ15 可在此追加 isr_32..isr_47。
-    // 谨慎起见，本版本不在此构造占位汇编 stub，避免对齐/大小语义被意外消费。
+    // ---- IRQ stub（v0.4 扩充到 32..47）：IRQ0 单独展开，余者走 isr_common ----,
+    	".global isr_32\n",
+    "isr_32:\n",
+    "push 0\n",
+    "push 32\n",
+    "mov rdi, [rsp]\n",
+    "push rax\n",
+    "push rbx\n",
+    "push rcx\n",
+    "push rdx\n",
+    "push rbp\n",
+    "push rsi\n",
+    "push rdi\n",
+    "push r8\n",
+    "push r9\n",
+    "push r10\n",
+    "push r11\n",
+    "push r12\n",
+    "push r13\n",
+    "push r14\n",
+    "push r15\n",
+    "mov rbx, rsp\n",
+    "call irq_dispatch\n",
+    "mov rsp, rbx\n",
+    "pop r15\n",
+    "pop r14\n",
+    "pop r13\n",
+    "pop r12\n",
+    "pop r11\n",
+    "pop r10\n",
+    "pop r9\n",
+    "pop r8\n",
+    "pop rdi\n",
+    "pop rsi\n",
+    "pop rbp\n",
+    "pop rdx\n",
+    "pop rcx\n",
+    "pop rbx\n",
+    "pop rax\n",
+    "add rsp, 16\n",
+    "iretq\n",
+    ".global isr_33", "isr_33:", "push 0", "push 33", "jmp isr_common",
+    ".global isr_34", "isr_34:", "push 0", "push 34", "jmp isr_common",
+    ".global isr_35", "isr_35:", "push 0", "push 35", "jmp isr_common",
+    ".global isr_36", "isr_36:", "push 0", "push 36", "jmp isr_common",
+    ".global isr_37", "isr_37:", "push 0", "push 37", "jmp isr_common",
+    ".global isr_38", "isr_38:", "push 0", "push 38", "jmp isr_common",
+    ".global isr_39", "isr_39:", "push 0", "push 39", "jmp isr_common",
+    ".global isr_40", "isr_40:", "push 0", "push 40", "jmp isr_common",
+    ".global isr_41", "isr_41:", "push 0", "push 41", "jmp isr_common",
+    ".global isr_42", "isr_42:", "push 0", "push 42", "jmp isr_common",
+    ".global isr_43", "isr_43:", "push 0", "push 43", "jmp isr_common",
+    ".global isr_44", "isr_44:", "push 0", "push 44", "jmp isr_common",
+    ".global isr_45", "isr_45:", "push 0", "push 45", "jmp isr_common",
+    ".global isr_46", "isr_46:", "push 0", "push 46", "jmp isr_common",
+    ".global isr_47", "isr_47:", "push 0", "push 47", "jmp isr_common",
 
     // ---- 统一入口：保存寄存器 → 对齐栈 → 调 Rust 分发 → 恢复 → iretq ----
     "isr_common:",
@@ -104,9 +158,8 @@ global_asm!(
     "push r15",
     "mov rbx, rsp",      // rbx = 帧指针（rbx 已入栈，会被恢复）
     "mov rdi, rsp",      // 第一参数 = &ExceptionFrame
-    "and rsp, -16",      // SysV 要求 call 前 16 字节对齐
     "call exception_dispatch",
-    "mov rsp, rbx",
+    "mov rsp, rbx",       // 恢复 call 前的栈帧（rbx 保存于 push rbx 之后、调用前）
     "pop r15",
     "pop r14",
     "pop r13",
@@ -122,7 +175,7 @@ global_asm!(
     "pop rcx",
     "pop rbx",
     "pop rax",
-    "add rsp, 16",       // 弹出 vector + error_code
+    "add rsp, 16",        // 弹出 vector + error_code（所有向量 stub 均压入二者）
     "iretq",
 );
 
@@ -159,11 +212,28 @@ extern "C" {
     fn isr_29();
     fn isr_30();
     fn isr_31();
+    fn isr_32();
+    fn isr_33();
+    fn isr_34();
+    fn isr_35();
+    fn isr_36();
+    fn isr_37();
+    fn isr_38();
+    fn isr_39();
+    fn isr_40();
+    fn isr_41();
+    fn isr_42();
+    fn isr_43();
+    fn isr_44();
+    fn isr_45();
+    fn isr_46();
+    fn isr_47();
+    fn irq_dispatch();
 }
 
-/// 异常处理入口地址表（idt.rs 消费）。
+/// 异常/IRQ 处理入口地址表（idt.rs 消费）。
 /// 在 Rust 侧构建而非汇编 `.quad`：目标为 PIE，`.rodata` 绝对重定位会被链接器拒绝。
-pub fn handler_table() -> [usize; NUM_VECTORS] {
+pub fn handler_table() -> [usize; IDT_SIZE] {
     [
         isr_0 as *const () as usize,
         isr_1 as *const () as usize,
@@ -197,12 +267,28 @@ pub fn handler_table() -> [usize; NUM_VECTORS] {
         isr_29 as *const () as usize,
         isr_30 as *const () as usize,
         isr_31 as *const () as usize,
+        isr_32 as *const () as usize,
+        isr_33 as *const () as usize,
+        isr_34 as *const () as usize,
+        isr_35 as *const () as usize,
+        isr_36 as *const () as usize,
+        isr_37 as *const () as usize,
+        isr_38 as *const () as usize,
+        isr_39 as *const () as usize,
+        isr_40 as *const () as usize,
+        isr_41 as *const () as usize,
+        isr_42 as *const () as usize,
+        isr_43 as *const () as usize,
+        isr_44 as *const () as usize,
+        isr_45 as *const () as usize,
+        isr_46 as *const () as usize,
+        isr_47 as *const () as usize,
     ]
 }
 
 /// 向量名表（Intel SDM Vol.3 Table 6-1；B-06：v0.2 起此表曾从向量 9 起错位一位，
 /// 导致 #PF 打印成 "reserved (#14)"，#GP 打印成 "page fault"；v0.3 已修正）
-const NAMES: [&str; NUM_VECTORS] = [
+const NAMES: [&str; IDT_SIZE] = [
     "divide error",
     "debug",
     "non-maskable interrupt",
@@ -235,6 +321,24 @@ const NAMES: [&str; NUM_VECTORS] = [
     "VMM communication",
     "security exception",
     "reserved (#31)",
+    // v0.4：IRQ0..IRQ15（向量 32..47）为外设中断，名称后续按设备补；
+    // 目前先用“irq(N)”占位，便于串口定位 IRQ 触发来源。
+    "irq(0)",
+    "irq(1)",
+    "irq(2)",
+    "irq(3)",
+    "irq(4)",
+    "irq(5)",
+    "irq(6)",
+    "irq(7)",
+    "irq(8)",
+    "irq(9)",
+    "irq(10)",
+    "irq(11)",
+    "irq(12)",
+    "irq(13)",
+    "irq(14)",
+    "irq(15)",
 ];
 
 fn print_reg(name: &str, val: u64) {
@@ -243,13 +347,20 @@ fn print_reg(name: &str, val: u64) {
     serial::print_hex(val);
 }
 
-/// 统一异常分发：输出完整诊断后停机（不返回）。
+/// 统一异常分发：在串口输出受控的前提下打印完整诊断后停机。
+///
+/// 中断上下文中禁止复用串口输出导致递归，因此仅在 cli 保护下打印。
 ///
 /// 由 `isr_common` 以 RDI = 栈帧指针调用；`rbx` 由 SysV 约定保留。
+///
+/// 注：IRQ0（向量 0x20）不再经过此函数，而是由向量 stub 直接调用 irq_dispatch。
 #[no_mangle]
 pub extern "C" fn exception_dispatch(frame: *mut ExceptionFrame) -> ! {
     // SAFETY: frame 由 isr_common 按 ExceptionFrame 布局构造
     let f = unsafe { &*frame };
+
+    // 打印完整诊断前临时关闭中断，避免在打印期间再次触发同一向量。
+    unsafe { asm!("cli", options(nostack, preserves_flags)); }
 
     let name = NAMES.get(f.vector as usize).copied().unwrap_or("unknown");
     serial::println("");

@@ -10,11 +10,9 @@
 //! - PIT 命令端口：0x43
 //! - IRQ0 经 PIC 映射为向量 `interrupt::controller::IRQ_BASE_VECTOR`
 //!
-//! TODO(v0.4):
-//! - PIT 参数配置（模式 3、期望频率/间隔）
-//! - IRQ0 handler 端接（EOI + tick 递增）
-//! - 简单 ktime/tick API
-//! - 可选：后续切换为 APIC timer 时在此抽象时钟源
+//! 当前阶段选用的观测方式：
+//! - IRQ0 handler 仅递增 tick，不复用串口打印（避免串口重入）。
+//! - 主循环/启动侧基于 tick_count 轮询打印心跳，用于验证 PIT 是否走通。
 
 #![allow(dead_code)]
 
@@ -33,6 +31,7 @@ impl TimeCtrl<'_> {
     /// 从 IRQ0 向量执行最小 EOI 语义。
     pub unsafe fn handle_irq0(&mut self, vector: u8) {
         // IRQ0 是 master IRQ0，属于 slave 范围之外，因此仅需主片 EOI。
+        // 当前阶段通过控制器做带向量的 EOI，后续可直接合并为全局控制器视图。
         self.controller.eoi_with_vector(vector);
     }
 }

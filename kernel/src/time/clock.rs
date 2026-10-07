@@ -22,9 +22,9 @@ pub unsafe fn tick_count() -> u64 {
 
 /// 增加内核 tick（供 IRQ0 handler 使用）。
 pub unsafe fn inc_tick() {
-    unsafe {    KERNEL_TICK = KERNEL_TICK.wrapping_add(1);
-    // 顺序保证：tick 递增对中断上下文可见（单核假定下保守添加）
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    unsafe {
+        KERNEL_TICK = KERNEL_TICK.wrapping_add(1);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
 }
 
-}
