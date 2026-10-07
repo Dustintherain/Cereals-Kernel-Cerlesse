@@ -1,8 +1,8 @@
 # Cerlesse OS 主开发文档（DEVELOPMENT）
 
 - 阶段：第一阶段
-- 最后更新：2026-10-06
-- 状态：第一阶段完成；随开发反复修订
+- 最后更新：2026-10-07
+- 状态：v0.1–v0.3 完成；随开发反复修订
 - 关联文档：[docs/architecture.md](docs/architecture.md) · [docs/roadmap.md](docs/roadmap.md) · [docs/project-structure.md](docs/project-structure.md)
 
 ---
@@ -33,6 +33,7 @@
 | H-03 | mkfs 工具（RAMFS/FAT 镜像生成） | Python | v0.7 |
 | H-04 | 测试编排服务（并行多场景跑 QEMU 测试） | Go | v0.4 |
 | H-05 | 串口日志实时收集与分析 | Go | v0.4 |
+| H-06 | 包管理器设计与主机侧原型（高效/安全/轻量、Windows 式灵活性参考） | 待定（先主机侧） | 设计阶段 |
 
 ### 1.3 非目标（见 architecture.md 第 5 节）
 
@@ -127,15 +128,27 @@ panic = "abort"
 但 v0.2 的异常注入测试暴露出 B-05 这一高危潜伏缺陷（静态重定位未处理），已在 v0.2 根治。
 异常防御缺失（B-02）同样由 v0.2 补齐并自动化验证。
 
-### v0.3 — Physical/Virtual Memory + Heap
-- [ ] 解析 BootInfo MemoryMap
-- [ ] FrameAllocator（bitmap 或 freelist）
-- [ ] 页表 Mapper、内核高半区映射
-- [ ] 内核堆 + `#[global_allocator]`
-- [ ] 验收：内核中 `Vec`/`Box` 可用，帧分配压力测试通过
+### v0.3 — Physical/Virtual Memory + Heap ✅（2026-10-07 完成）
+- [x] 解析 BootInfo MemoryMap（UEFI 描述符，仅 `EfiConventionalMemory` 可用）
+- [x] FrameAllocator（位图，1 bit/帧，128KiB 静态位图覆盖 4GiB；保留内核映像/低 1MiB/BootInfo/堆区）
+- [x] 页表 Mapper（4 级 translate / map_4k / unmap_4k / TLB 刷新 / AddressSpace / 恒等映射补齐）
+      —— 内核高半区映射移至 v0.6（ADR-009，与用户态隔离一并完成）
+- [x] 内核堆 + `#[global_allocator]`（内核映像末尾预留 1MiB + 首次适配空闲链表，带合并）
+- [x] 验收（自动化）：`make test-memory` PASS（`Box`/`Vec`/`String` + 1024 帧压力 + 页表映射自测）；
+      `make test-pagefault` PASS（#PF 诊断 + CR2）；`make test` / `make test-exception` 回归 PASS
+
+v0.3 发现并修复的缺陷（随本阶段一并落地）：
+
+| # | 级别 | 问题 | 修复措施 |
+| ---- | ---- | ---- | ---- |
+| B-06 | 中 | v0.2 异常名表自向量 9 起错位一位（漏记 #9 coprocessor segment overrun）→ #PF 打印成 `reserved (#14)`、#GP 打印成 `page fault`；v0.2 的 #DE 测试刚好在错位之前 | 按 Intel SDM Table 6-1 重建 32 项名表；新增 `make test-pagefault` 覆盖 #PF 名称 + CR2 |
+| B-07 | 中 | 堆分配器首版把对齐前导 padding 计入已分配块大小 → 块尾越界覆盖后继空闲块头（空闲链表自环、分配死循环） | 块大小改为 `want - pad`；压力测试增加填充模式校验（抓重叠/越界），已回归 |
 
 ### v0.4 — Interrupt + Timer + Keyboard
-- [ ] PIC（后 APIC）初始化与 IRQ 分发
+- [x] 中断控制器骨架与 PIC 第一版（初始化、IRQ→向量映射、mask/EOI 原语）
+- [x] `mod interrupt` 绑定到 `controller / exception / irq` 子模块
+- [x] `kernel_main` 中接入 PIC 初始化（默认全屏蔽，不开启外设 IRQ）
+- [x] 这次额外纳入的外部流程文档：`kernel/src/interrupt/doc CONTRIBUTING_CHAIN.md`（当前作为本模块集成上下文快照，不覆盖 DEVELOPMENT.md 本身的阶段定义）
 - [ ] PIT Timer tick + 系统计时
 - [ ] PS/2 键盘中断输入
 - [ ] 上下文切换原语（为 v0.5 铺路）
@@ -188,11 +201,11 @@ panic = "abort"
 
 | 层级 | 内容 | 工具 | 开始版本 |
 | ---- | ---- | ---- | ---- |
-| 单元测试 | 纯逻辑模块（分配器算法、ELF 解析、路径解析）在 host 上 `cargo test` | Rust | v0.3 |
+| 单元测试 | 纯逻辑模块（分配器算法、ELF 解析、路径解析）在 host 上 `cargo test` | Rust | v0.4（v0.3 暂以内核内自测覆盖，见 docs/memory.md 第 5 节） |
 | 集成测试 | QEMU 启动 → 断言串口日志包含预期输出 | Python (H-02) | v0.1 |
 | 压力测试 | 帧分配、任务轮转、fork 风暴 | Python + Go 编排 | v0.3/v0.5 |
 | 回归测试 | 每个里程碑的验收标准固化为测试用例 | Go 编排服务 | v0.4 |
-| 异常测试 | 故意触发 #PF/#GP，校验诊断输出 | Python | v0.2 |
+| 异常测试 | 故意触发 #DE/#PF，校验诊断输出（`make test-exception` / `make test-pagefault`） | Python | v0.2（#PF 于 v0.3 加入） |
 
 约定：
 
@@ -244,3 +257,4 @@ qemu-system-x86_64 -machine q35 -m 512M -serial stdio -display none \
 | 日期 | 变更 |
 | ---- | ---- |
 | 2026-10-06 | 第一阶段初稿：需求、依赖、workspace 规划、v0.1–v1.0 任务清单、测试/QEMU/Issue 规划 |
+| 2026-10-07 | v0.3 完成：内存管理（帧分配器/页表 Mapper/内核堆）；新增 test-memory、test-pagefault 验收目标；补记 B-06/B-07 |
