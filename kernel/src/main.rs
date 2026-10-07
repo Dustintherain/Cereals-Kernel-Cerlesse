@@ -1,4 +1,4 @@
-//! Cerlesse OS 内核入口（v0.1 实现；v0.2 GDT/IDT；v0.3 内存管理）
+//! Cerlesse OS 内核入口（v0.1 实现；v0.2 GDT/IDT；v0.3 内存管理；v0.4 中断/Timer）
 //!
 //! 启动链：UEFI Bootloader 加载本内核 ELF → ExitBootServices → 跳转 `_start`，
 //! RDI 指向 `shared::BootInfo`。本文件建立自己的栈并进入 `kernel_main`。
@@ -50,61 +50,31 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
     arch::x86_64::init();
     driver::serial::println("GDT/TSS + IDT loaded");
 
-    // v0.4: 初始化中断控制器（PIC），随后再决定启用哪些 IRQ
+    // v0.4: 初始化中断控制器（PIC），再配置 PIT/IRQ0，并打开处理器中断。
     {
         let mut controller = interrupt::controller::Controller::new(
             interrupt::controller::ControllerKind::Pic,
         );
         controller.init_pic();
-        // 先保持全部 IRQ 屏蔽；后续再按需 enable_irq(...)。
         driver::serial::println("PIC initialized");
 
-        // v0.4 延伸：准备 PIT 定时器子系统，并启用 IRQ0（PIT 通道 0），
-        // 作为下一阶段验证 tick 路径的第一步。
-        //
-        // 注意：此时 IRQ0 已在 PIC 上使能，但处理器中断标志（IF）
-        // 仍关闭，因此外设中断尚不会递交。下一步再决定是否开启 IF。
-        //
-        // `mod time;` 已在本 crate 根声明，因此此处可通过 `time::timer` 引用。
+        // v0.4：配置 PIT 通道 0、启用 IRQ0、打开 IF，使 PIT 周期性中断可递交。
         {
             use time::timer;
-
             unsafe {
-                // 通道 0：模式 3、重装载值示例（暂不保证具体 Hz，
-                // 只作为可验证的可接通配置）。
+                // 通道 0、模式 3、重装载值示例（串口心跳频率由此决定）。
                 timer::set_channel0_reload(0xFFFF_u16);
+                controller.enable_irq(0);
             }
 
-            // 启用 IRQ0（PIT 通道 0）
-            controller.enable_irq(0);
             driver::serial::println(
-                "PIT channel0 configured; IRQ0 enabled on PIC",
+                "PIT channel0 configured; IRQ0 enabled on PIC; IF enabled",
             );
-        }
 
-        // v0.4 延伸2：演示 IRQ 分发预留入口存在（尚未真正接通中断递交）。
-        // 这里只是调用一次 `irq_dispatch` 占位函数，表达后续流式分发意图。
-        unsafe {
-            interrupt::irq::irq_dispatch(
-                interrupt::controller::irq0_vector(),
-            );
+            // 打开处理器中断标志（IF），允许可屏蔽中断递交。
+            unsafe { arch::x86_64::enable_irqs(); }
         }
-        arch::x86_64::mark_irq0_dispatch_placeholder_called();
-        driver::serial::println(
-            "irq_dispatch(IRQ0) placeholder invoked",
-        );
     }
-
-    // v0.4 延伸2（补充）：再次调用 IRQ 分发预留入口，表达后续占位流式分发意图。
-    unsafe {
-        interrupt::irq::irq_dispatch(
-            interrupt::controller::irq0_vector(),
-        );
-    }
-    interrupt::irq::mark_irq_dispatch_placeholder_called();
-    driver::serial::println(
-        "irq_dispatch(IRQ0) placeholder invoked again",
-    );
 
 
     if boot_info.is_null() {
@@ -133,7 +103,7 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
 
     driver::serial::println("Kernel started!");
 
-    // v0.4 延伸2：简单观测当前 IF 状态（仅用于启动日志，不作为中断递交判断依据）。
+    // v0.4：简单观测当前 IF 状态，确认中断使能路径已接通。
     {
         let enabled = arch::x86_64::irqs_enabled();
         driver::serial::print("IF=");

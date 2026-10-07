@@ -51,11 +51,6 @@ impl Controller {
         self.kind
     }
 
-    /// 返回当前 PIC mask 位图（仅对 Pic 有效；Apic 返回 0）。
-    pub fn pic_mask(&self) -> u16 {
-        self.pic_mask
-    }
-
     /// 屏蔽指定 IRQ（PIC mask 位图语义）。
     pub fn mask_irq(&mut self, irq: u8) {
         if irq >= 16 {
@@ -145,6 +140,11 @@ impl Controller {
         self.sync_mask();
     }
 
+    /// 返回当前 PIC mask 位图（仅对 Pic 有效；Apic 返回 0）。
+    pub fn pic_mask(&self) -> u16 {
+        self.pic_mask
+    }
+
     /// 将当前 mask 同步到 PIC 两片的 mask 寄存器。
     fn sync_mask(&mut self) {
         if !matches!(self.kind, ControllerKind::Pic) {
@@ -158,15 +158,27 @@ impl Controller {
 
     /// 带向量的 PIC EOI：若该向量属于 slave IRQ（IRQ8..15），
     /// 先 EOI slave，再 EOI master。否则仅 EOI master。
-    pub unsafe fn eoi_with_vector(&mut self, vector: u8) {
-        if !matches!(self.kind, ControllerKind::Pic) {
-            return;
-        }
+    pub(crate) unsafe fn eoi_with_vector(&mut self, vector: u8) {
         if vector >= IRQ_BASE_VECTOR + 8 {
             unsafe { outb(PIC2_CMD, 0x20); }
         }
         unsafe { outb(PIC1_CMD, 0x20); }
     }
+
+    /// 以纯端口语义直接发送主片 EOI（不依赖控制器 mask 状态）。
+    /// 与 `Controller::eoi()` 语义一致，供中断上下文中の直接调用备用。
+    pub(crate) unsafe fn eoi_master() {
+        unsafe { outb(PIC1_CMD, 0x20); }
+    }
+}
+
+/// 以静态无状态方式发送 PIC EOI（仅对 Pic 生效；Apic 返回）。
+/// 用于中断上下文中の临时 EOI 占位；后续应替换为全局/单例控制器视图。
+pub(crate) unsafe fn eoi_with_vector_static(vector: u8) {
+    if vector >= IRQ_BASE_VECTOR + 8 {
+        unsafe { outb(PIC2_CMD, 0x20); }
+    }
+    unsafe { outb(PIC1_CMD, 0x20); }
 }
 
 impl fmt::Debug for Controller {
@@ -177,6 +189,8 @@ impl fmt::Debug for Controller {
             .finish()
     }
 }
+
+/// 模块结尾占位，不改变模块语义
 
 /// IRQ 向量映射示例（PIC 传统做法：IRQ0 → 向量 32，随后顺延）。
 /// 这里先写死一个常见映射，便于后续对齐文档里的“IRQ 分发”语义。
@@ -224,6 +238,12 @@ unsafe fn outb(port: u16, val: u8) {
 
 // 不再在此模块使用 inb；仅 outb 对 PIC 初始化与 EOI 已足够。
 // 若后续需要轮询 PIC 状态，可在此补充 inb。
+
+/// 以纯端口语义直接发送主片 EOI（不依赖控制器 mask 状态）。
+/// 与 `Controller::eoi()` 语义一致，供中断上下文中の直接调用备用。
+pub(crate) unsafe fn eoi_master() {
+    unsafe { outb(PIC1_CMD, 0x20); }
+}
 
 #[cfg(test)]
 mod tests {

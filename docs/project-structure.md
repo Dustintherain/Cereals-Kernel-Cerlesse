@@ -2,7 +2,9 @@
 
 - 阶段：第一阶段 / 结构规划
 - 最后更新：2026-10-06
-- 说明：代码框架已按本结构创建占位文件；占位文件内标注了计划实现的版本号。
+- 状态：✅ 已完成（代码框架已按本结构创建占位文件；占位文件内标注了计划实现的版本号）
+
+> 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
 
 ## 1. 完整目录树
 
@@ -62,8 +64,8 @@ Cerlesse/
 | ---- | ---- | ---- |
 | `shared/` | BootInfo 等跨 boot/kernel 纯数据结构 | v0.1 ✅ |
 | `boot/` | UEFI 引导、内存检测、装载内核、传递 BootInfo | v0.1 ✅ |
-| `kernel/src/arch/x86_64/` | GDT、IDT、控制寄存器、页表操作、上下文切换 | v0.1–v0.5 |
-| `kernel/src/memory/` | 物理帧分配、虚拟内存映射、内核堆、全局分配器 | v0.3 |
+| `kernel/src/arch/x86_64/` | GDT、IDT、控制寄存器（`cpu.rs`）、页表操作（`paging.rs`）、上下文切换 | v0.1–v0.3 ✅ |
+| `kernel/src/memory/` | 物理帧分配、虚拟内存映射、内核堆、全局分配器 | v0.3 ✅ |
 | `kernel/src/interrupt/` | 异常处理、IRQ 分发、PIC/APIC | v0.2 / v0.4 |
 | `kernel/src/time/` | PIT/APIC Timer、系统时钟、sleep/yield | v0.4 |
 | `kernel/src/process/` | 进程/线程模型、PID、状态机 | v0.5 |
@@ -85,3 +87,4 @@ Cerlesse/
 | ---- | ---- |
 | 2026-10-06 | 第一阶段初稿，同步创建代码文件框架占位 |
 | 2026-10-06 | v0.1 落地：新增 `shared/` crate、`link.ld`、`build.rs`，boot/kernel 标记完成 |
+| 2026-10-07 | v0.3 落地：`memory/` 与 `arch/x86_64/{paging,cpu}.rs` 实现完成；link.ld 增加 `__kernel_start/__kernel_end` |

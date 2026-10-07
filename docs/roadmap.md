@@ -2,6 +2,9 @@
 
 - 阶段：第一阶段 / 路线规划
 - 最后更新：2026-10-06
+- 状态：✅ 已完成
+
+> 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
 
 ## 1. 总体开发路线
 
@@ -47,7 +50,7 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
 | ---- | ---- | ---- |
 | **v0.1 ✅** | Bootloader + Rust Kernel（2026-10-06 QEMU 验收通过） | boot.md |
 | **v0.2 ✅** | GDT + IDT + Exception（2026-10-06 验收通过） | boot.md / memory.md |
-| **v0.3** | Physical/Virtual Memory + Heap | memory.md |
+| **v0.3 ✅** | Physical/Virtual Memory + Heap（2026-10-07 验收通过；高半区映射移至 v0.6，ADR-009） | memory.md |
 | **v0.4** | Interrupt + Timer + Keyboard | drivers.md |
 | **v0.5** | Process + Thread + Scheduler | process.md |
 | **v0.6** | Syscall + User Space | syscall.md |
@@ -75,3 +78,4 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
 | 2026-10-06 | 第一阶段初稿：10 个里程碑 + 25 步依赖顺序 |
 | 2026-10-06 | v0.1 完成，里程碑表标记 ✅ |
 | 2026-10-06 | v0.2 完成（GDT/IDT/异常 + B-01/B-05 修复），里程碑表标记 ✅ |
+| 2026-10-07 | v0.3 完成（帧分配器/页表 Mapper/内核堆 + B-06/B-07 修复），里程碑表标记 ✅ |

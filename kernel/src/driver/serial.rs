@@ -1,6 +1,5 @@
 //! 串口驱动：16550 UART @ COM1（v0.1 实现）
 //!
-//! QEMU `-serial stdio` 下这是内核唯一权威日志通道（见 DEVELOPMENT.md 第 7 节）。
 
 const COM1: u16 = 0x3F8;
 
@@ -61,6 +60,25 @@ pub fn println(s: &str) {
     print(s);
     putc(b'\r');
     putc(b'\n');
+}
+
+pub fn print_dec(val: u64) {
+    if val == 0 {
+        putc(b'0');
+        return;
+    }
+    let mut buf = [0u8; 20];
+    let mut len = 0;
+    let mut v = val;
+    while v > 0 {
+        buf[len] = b'0' + (v % 10) as u8;
+        v /= 10;
+        len += 1;
+    }
+    while len > 0 {
+        len -= 1;
+        putc(buf[len]);
+    }
 }
 
 pub fn print_hex(val: u64) {

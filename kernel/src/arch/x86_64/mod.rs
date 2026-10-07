@@ -25,8 +25,8 @@ pub fn init() {
 ///
 /// 当前实现为简单 `sti`；后续可结合态势控制与屏蔽语义包装。
 ///
-/// 注意：本函数目前仅作为 v0.4 时间/IRQ 路径的预留入口，
-/// 尚未在启动链中实际调用（IRQ0 虽已在 PIC 上使能，但 IF 仍关闭）。
+/// 注意：v0.4 中本函数已在启动链中调用（PIT/IRQ0 配置后打开 IF），
+/// 从而使 PIT 周期性中断得以递交。
 pub unsafe fn enable_irqs() {
     // 打开处理器中断标志（IF），允许可屏蔽中断递交。
     unsafe {
@@ -64,6 +64,7 @@ pub fn irqs_enabled() -> bool {
 /// 返回当前向量号是否属于 slave IRQ 范围（IRQ8..IRQ15）。
 ///
 /// 当前 PIC 映射下，slave IRQ 对应向量 `IRQ_BASE_VECTOR+8 .. IRQ_BASE_VECTOR+15`。
+#[allow(dead_code)]
 pub fn is_pic_slave_irq(vector: u8) -> bool {
     vector >= controller::IRQ_BASE_VECTOR + 8
         && vector <= controller::IRQ_BASE_VECTOR + 15
@@ -77,11 +78,13 @@ pub fn is_pic_slave_irq(vector: u8) -> bool {
 pub static mut IRQ0_DISPATCH_PLACEHOLDER_CALLED: bool = false;
 
 /// 标记 IRQ0 分发预留入口已被调用（仅用于启动链中的占位演示）。
+#[allow(dead_code)]
 pub fn mark_irq0_dispatch_placeholder_called() {
     unsafe { IRQ0_DISPATCH_PLACEHOLDER_CALLED = true; }
 }
 
 /// 查询 IRQ0 分发预留入口是否已在启动链中被调用过。
+#[allow(dead_code)]
 pub fn irq0_dispatch_placeholder_called() -> bool {
     unsafe { IRQ0_DISPATCH_PLACEHOLDER_CALLED }
 }

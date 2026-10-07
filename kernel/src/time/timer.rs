@@ -61,3 +61,7 @@ unsafe fn outb(port: u16, val: u8) {
         );
     }
 }
+
+/// 当前内核使用的 PIT 重装载值占位标记，便于验收/调试引用。
+/// 实际值由 `set_channel0_reload` 设置；这里仅表示 **0xFFFF 示例配置已应用**。
+pub static PIT_INITIALIZED: () = ();

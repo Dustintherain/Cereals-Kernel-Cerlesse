@@ -9,27 +9,22 @@
 
 #![allow(dead_code)]
 
-/// 内核已观测到的 PIT tick 数（仅作示例语义，尚未由 IRQ0 handler 实际更新）。
+/// 内核已观测到的 PIT tick 数（由 IRQ0 handler 更新）。
 ///
-/// 真实实现中，这一变量应由中断上下文安全地更新，并考虑读/写可见性。
+/// 当前阶段为单核 + 中断上下文更新，先用普通静态变量；
+/// 若后续引入原子/屏障需求，再迁移到 `core::sync::atomic`。
 pub static mut KERNEL_TICK: u64 = 0;
 
 /// 返回当前已记录的内核 tick 数。
-///
-/// # Safety
-///
-/// 当前实现依赖非原子的静态可变变量；调用者必须自行确保读取时
-/// 不会与中断上下文更新发生竞争。后续应替换为原子或受锁保护的实现。
 pub unsafe fn tick_count() -> u64 {
-    KERNEL_TICK
+    unsafe { KERNEL_TICK }
 }
 
-/// 增加内核 tick（预留给 IRQ0 handler 使用）。
-///
-/// # Safety
-///
-/// 只能从适合的中断/时钟上下文调用。当前实现为简单自增，不保证
-/// 多核或并发安全。
+/// 增加内核 tick（供 IRQ0 handler 使用）。
 pub unsafe fn inc_tick() {
-    KERNEL_TICK = KERNEL_TICK.wrapping_add(1);
+    unsafe {    KERNEL_TICK = KERNEL_TICK.wrapping_add(1);
+    // 顺序保证：tick 递增对中断上下文可见（单核假定下保守添加）
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
 }

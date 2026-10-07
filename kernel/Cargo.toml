@@ -9,3 +9,7 @@ shared = { path = "../shared" }
 [features]
 # v0.2 异常注入测试：构建后在启动末尾故意触发 #DE（make test-exception）
 exception-test = []
+# v0.3 页错误测试：内存初始化后访问未映射地址，断言 #PF 诊断（make test-pagefault）
+pagefault-test = []
+# v0.4 中断/Timer 功能门控（保留扩展用）：若启用则 IRQ0 tick 路径与串口心跳语义可在此门下验证
+#interrupt-test = []

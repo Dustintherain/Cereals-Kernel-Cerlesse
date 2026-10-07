@@ -36,3 +36,9 @@ impl TimeCtrl<'_> {
         self.controller.eoi_with_vector(vector);
     }
 }
+
+/// IRQ 分发前瞻入口：将来可在此统一IRQ向量 → 子系统分发映射。
+/// 当前阶段仅做占位，不处理实际中断。
+pub fn dispatch_irq(_vector: u8) {
+    let _ = _vector;
+}

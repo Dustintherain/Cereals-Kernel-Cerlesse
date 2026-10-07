@@ -6,10 +6,13 @@
 
 ## 当前进度
 
-**v0.2 已完成（2026-10-06）**：自建 GDT/TSS（IST1 双错栈）+ IDT + 异常诊断转储；
-修复 v0.1 潜伏缺陷（入口 cli 窗口、PIE 动态重定位未处理）。
-自动化验证：`make test` 正常启动回归 PASS；`make test-exception` 故意触发 #DE 断言诊断 PASS。
-下一步：v0.3 物理/虚拟内存 + 内核堆（见 [DEVELOPMENT.md](DEVELOPMENT.md) 任务清单）。
+**v0.3 已完成（2026-10-07）**：物理内存 + 虚拟内存 + 内核堆。
+解析 UEFI 内存映射 → 位图帧分配器（4KiB/帧，覆盖 4GiB）→ 4 级页表 Mapper 与 AddressSpace →
+内核堆（内核映像后预留 1MiB，首次适配空闲链表）→ `#[global_allocator]`（内核中可直接用 `Box`/`Vec`/`String`）。
+顺带修复 v0.2 遗留缺陷：异常名表错位（#PF 被打印成 `reserved (#14)`，B-06）。
+自动化验证：`make test` 回归 PASS；`make test-exception`（#DE）PASS；`make test-memory`（堆/帧/页表自测）PASS；
+`make test-pagefault`（#PF 诊断 + CR2）PASS。
+下一步：v0.4 中断控制器 + Timer + 键盘（见 [DEVELOPMENT.md](DEVELOPMENT.md) 任务清单）。
 
 ## 文档入口
 
@@ -22,7 +25,7 @@
 ## 项目结构（概览）
 
 ```text
-boot/      UEFI 引导（v0.1 ✅）   kernel/    Rust 内核主体（v0.1 ✅）
+boot/      UEFI 引导（v0.1 ✅）   kernel/    Rust 内核主体（v0.3 ✅，含内存管理）
 shared/    boot/kernel 共享结构    user/      用户态程序（v0.6+）
 tools/     Python 主机工具        tools-go/  Go 主机服务
 tests/     QEMU 集成测试（v0.1 ✅） docs/     全部开发文档
@@ -35,4 +38,7 @@ make build           # 构建 boot + kernel + 磁盘镜像
 make run             # QEMU + OVMF 启动（串口输出到终端）
 make test            # 集成测试：断言串口出现 "Kernel started!"
 make test-exception  # v0.2：注入 #DE，断言异常诊断输出
+make test-memory     # v0.3：断言帧分配器 / 内核堆 / 页表 Mapper 自测输出
+make test-pagefault  # v0.3：访问未映射地址，断言 #PF 诊断 + CR2
+make test-all        # 全部集成测试
 ```

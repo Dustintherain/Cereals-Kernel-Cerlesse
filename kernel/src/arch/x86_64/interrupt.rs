@@ -189,6 +189,8 @@ pub fn handler_table() -> [usize; NUM_VECTORS] {
     ]
 }
 
+/// 向量名表（Intel SDM Vol.3 Table 6-1；B-06：v0.2 起此表曾从向量 9 起错位一位，
+/// 导致 #PF 打印成 "reserved (#14)"，#GP 打印成 "page fault"；v0.3 已修正）
 const NAMES: [&str; NUM_VECTORS] = [
     "divide error",
     "debug",
@@ -199,19 +201,19 @@ const NAMES: [&str; NUM_VECTORS] = [
     "invalid opcode",
     "device not available",
     "double fault",
+    "coprocessor segment overrun",
     "invalid TSS",
     "segment not present",
     "stack-segment fault",
     "general protection fault",
     "page fault",
-    "reserved (#14)",
+    "reserved (#15)",
     "x87 float exception",
     "alignment check",
     "machine check",
     "SIMD float exception",
     "virtualization exception",
     "control protection",
-    "reserved (#21)",
     "reserved (#22)",
     "reserved (#23)",
     "reserved (#24)",
