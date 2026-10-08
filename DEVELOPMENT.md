@@ -299,3 +299,4 @@ qemu-system-x86_64 -machine q35 -m 512M -serial stdio -display none \
 | 2026-10-08 | v0.4 完成：PIC/PIT 100Hz/PS-2 键盘/上下文切换原语；新增 test-keyboard 验收目标；补记 B-08/B-09；H-04/H-05 主机侧 Go 工具仍待开工 |
 | 2026-10-08 | v0.5 内核侧落地：线程模型/PID/就绪队列/Round Robin 时间片调度接入 PIT/IRQ0；新增 test-scheduler；补记 B-10/B-11/B-12；IPC 仍待做 |
 | 2026-10-08 | v0.4 收尾（H-04/H-05）：Go 测试编排器（testorch）+ 串口日志分析（serialmon）落地；新增 `make go-test` / `make test-orch`；测试脚本支持 `--ovmf-vars`/`--monitor`/`--timeout` 隔离与磁盘 `snapshot=on` 共享 |
+| 2026-10-08 | 本次 docs 迭代统一各阶段文档顶部元信息（阶段 / 最后更新 / 状态）、修订记录与本文件描述一致，保持索引与主开发文档一致 |

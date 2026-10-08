@@ -88,3 +88,4 @@ Cerlesse/
 | 2026-10-06 | 第一阶段初稿，同步创建代码文件框架占位 |
 | 2026-10-06 | v0.1 落地：新增 `shared/` crate、`link.ld`、`build.rs`，boot/kernel 标记完成 |
 | 2026-10-07 | v0.3 落地：`memory/` 与 `arch/x86_64/{paging,cpu}.rs` 实现完成；link.ld 增加 `__kernel_start/__kernel_end` |
+| 2026-10-08 | 本次 docs 迭代统一文档顶部元信息（阶段 / 最后更新 / 状态）与修订记录，保持与 DEVELOPMENT.md 与索引文档描述一致 |

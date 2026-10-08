@@ -1,8 +1,8 @@
 # 总体开发路线图（第一阶段）
 
 - 阶段：第一阶段 / 路线规划
-- 最后更新：2026-10-07
-- 状态：✅ 已完成（2026-10-07 补记 docs 完善进度）
+- 最后更新：2026-10-08
+- 状态：✅ 已完成（2026-10-08 补记 docs 完善进度与 v0.4/v0.5 验收状态）
 
 > 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
 
@@ -81,4 +81,4 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
 | 2026-10-07 | v0.3 完成（帧分配器/页表 Mapper/内核堆 + B-06/B-07 修复），里程碑表标记 ✅ |
 | 2026-10-07 | 补完 v0.3 后尚未整理的文档：完善 docs/drivers.md / docs/syscall.md / docs/filesystem.md / docs/process.md，补记 DEVELOPMENT.md v0.4 验收项与 docs/README.md 索引状态 |
 | 2026-10-08 | v0.4 完成（PIC/PIT 100Hz/PS-2 键盘/上下文切换原语 + 自动化验收），里程碑表标记 ✅ |
-| 2026-10-08 | v0.5 内核侧核心完成（线程/PID/就绪队列/Round Robin 时间片抢占 + `make test-scheduler`），里程碑表标记 🟡（IPC 待做） |
+| 2026-10-08 | v0.5 内核侧核心完成（线程/PID/就绪队列/Round Robin 时间片抢占 + `make test-scheduler`），里程碑表标记 🟡（IPC 待做）；本次 docs 迭代统一各阶段文档顶部元信息、修订记录与主开发文档（DEVELOPMENT.md）描述一致 |
