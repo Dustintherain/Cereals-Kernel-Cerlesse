@@ -1,9 +1,9 @@
 # Cerlesse OS 主开发文档（DEVELOPMENT）
 
 - 阶段：第一阶段
-- 最后更新：2026-10-07
-- 状态：v0.1–v0.3 完成；随开发反复修订
-- 关联文档：[docs/architecture.md](docs/architecture.md) · [docs/roadmap.md](docs/roadmap.md) · [docs/project-structure.md](docs/project-structure.md)
+- 最后更新：2026-10-08
+- 状态：v0.1–v0.4 完成（含 H-04/H-05 主机侧 Go 工具）；v0.5 内核侧核心完成（线程模型 + 上下文切换 + Round Robin 时间片调度，已验收）；IPC 待做
+- 关联文档：[docs/architecture.md](docs/architecture.md) · [docs/roadmap.md](docs/roadmap.md) · [docs/project-structure.md](docs/project-structure.md) · [docs/drivers.md](docs/drivers.md) · [docs/syscall.md](docs/syscall.md) · [docs/filesystem.md](docs/filesystem.md) · [docs/process.md](docs/process.md)
 
 ---
 
@@ -107,12 +107,14 @@ panic = "abort"
 - [x] `kernel_main` 入口 + Serial Console 输出（自建栈，sysv64 边界调用）
 - [x] Python 镜像构建脚本（H-01，mtools 组装 64MiB FAT）与 QEMU 启动测试（H-02）
 - [x] 验收：QEMU 打印 "Kernel started!"（`make test` 断言通过）
+- [x] 文档完成：[docs/boot.md](docs/boot.md)（v0.1 实现记录、踩坑记录 ADR-006/007/008）
 
 ### v0.2 — GDT + IDT + Exception ✅（2026-10-06 完成）
 - [x] 自建 GDT（null/kcode/kdata）+ TSS（IST1 专用双错栈、RSP0 预留）+ ltr
 - [x] IDT 32 个异常向量，汇编 stub（区分有/无错误码）+ 统一保存/恢复（`exception_dispatch`）
 - [x] 异常 handler 诊断输出：向量名、错误码、RIP/CS/RFLAGS/RSP/SS、通用寄存器、#PF 时 CR2
 - [x] 验收（自动化）：`make test` 回归 PASS；`make test-exception` PASS（串口含 `EXCEPTION: divide error` + 完整寄存器转储 + `KERNEL PANIC: unhandled exception`）
+- [x] 文档完成：[docs/boot.md](docs/boot.md)（v0.1/v0.2 实现记录、B-01/B-05/B-06 修复）
 
 ### v0.1 缺陷复查与修复（2026-10-06，随 v0.2 一并落地）
 
@@ -136,6 +138,7 @@ panic = "abort"
 - [x] 内核堆 + `#[global_allocator]`（内核映像末尾预留 1MiB + 首次适配空闲链表，带合并）
 - [x] 验收（自动化）：`make test-memory` PASS（`Box`/`Vec`/`String` + 1024 帧压力 + 页表映射自测）；
       `make test-pagefault` PASS（#PF 诊断 + CR2）；`make test` / `make test-exception` 回归 PASS
+- [x] 文档完成：[docs/memory.md](docs/memory.md)（v0.3 实现记录、B-06/B-07、ADR-009/010/011 落地）
 
 v0.3 发现并修复的缺陷（随本阶段一并落地）：
 
@@ -149,18 +152,53 @@ v0.3 发现并修复的缺陷（随本阶段一并落地）：
 - [x] `mod interrupt` 绑定到 `controller / exception / irq` 子模块
 - [x] `kernel_main` 中接入 PIC 初始化（默认全屏蔽，不开启外设 IRQ）
 - [x] 这次额外纳入的外部流程文档：`kernel/src/interrupt/doc CONTRIBUTING_CHAIN.md`（当前作为本模块集成上下文快照，不覆盖 DEVELOPMENT.md 本身的阶段定义）
-- [ ] PIT Timer tick + 系统计时
-- [ ] PS/2 键盘中断输入
-- [ ] 上下文切换原语（为 v0.5 铺路）
-- [ ] Go 测试编排/串口日志工具（H-04/H-05）
-- [ ] 验收：tick 递增、按键回显、10ms 心跳日志
+- [x] PIC 选型策略与当前状态记录（`kernel/src/interrupt/pic_policy.md`、`kernel/src/interrupt/known_state.md`）
+- [x] PIT Timer tick + 系统计时雏形（`kernel/src/time/timer.rs` 设置通道 0 重装载值、`kernel/src/time/clock.rs` 提供 tick 计数）
+- [x] IRQ 分发入口与最小 IRQ0 注册表骨架（`kernel/src/interrupt/irq.rs`），串口心跳防重入保护具备
+- [x] IRQ0（PIT）回调已注册，在串口观测心跳（每 10 个 tick 打印一次 `tick=<n>`，经回归测试环境确认可观察）
+- [x] PIT 通道 0 频率校正为 **100Hz（10ms/tick）**（`time::timer::TICK_RELOAD_100HZ`，心跳节流每 100 tick = 1 秒）
+- [x] IRQ 汇编 stub 修正：向量 32..47 全部走 `irq_common` 分发（原先只有 IRQ0 特例，其余 IRQ 会落入异常分发而 panic）
+- [x] IRQ 统一入口 `irq_common` 保存/恢复全部通用寄存器（见 B-09）
+- [x] `kernel/src/driver/keyboard.rs`：PS/2 键盘控制器初始化（排空输出缓冲、打开 IRQ1 使能位）
+- [x] PS/2 键盘中断输入：IRQ1 扫描码接收 → set 1 解码（字母/数字/Shift/扩展前缀）→ 串口回显 `KB <字符>`
+- [x] 上下文切换原语（为 v0.5 铺路）：`arch::x86_64::context` 的 `switch_to` / `init_context` + 内核自测 `context: switch PASS`
+- [x] H-04 测试编排服务（Go，`tools-go/cmd/testorch` + `internal/orchestrator`）：读取 `tests/orchestrate.json`，
+      并行调度 6 个 QEMU 场景（并发度可配），每场景独占 OVMF_VARS/串口日志/monitor socket，
+      跑完后对串口日志做二次复核（期望子串 + 心跳/异常分析），失败则退出码非 0
+- [x] H-05 串口日志实时收集与分析（Go，`tools-go/cmd/serialmon` + `internal/serialparse`）：
+      tail -f 式跟随或 `-once` 快照分析，逐行分类（心跳/按键/调度/异常/PANIC/自测结果），
+      检测心跳 tick 回退/停摆，`-expect` 核对期望子串，退出码 0/1/2 区分通过/异常/用法错误
+- [x] 并行共享磁盘镜像：QEMU 改用 `snapshot=on`（临时写时复制），多场景并发不抢镜像写锁且不污染原镜像
+- [x] 主机侧单元测试：`make go-test`（`go vet` + `go test`，覆盖串口分类/心跳异常/期望核对/编排器并行与超时）
+- [x] 验收（自动化）：
+      `make test`（启动回归）PASS；`make test-memory`（堆/帧/页表 + 上下文切换自测）PASS；
+      `make test-keyboard`（QEMU monitor 注入真实按键 → `KBIRQ ENTRY` / `KB a` / `KBIRQ EXIT` + `IRQ0_heartbeat tick=`）PASS；
+      `make test-exception` / `make test-pagefault` 回归 PASS；
+      `make test-orch`（H-04：6 场景并行 + 串口二次复核）PASS；`make go-test` PASS
 
-### v0.5 — Process + Thread + Scheduler
-- [ ] Task/Thread 结构与状态机
-- [ ] 内核级上下文切换
-- [ ] Round Robin 调度器 + 时间片
+v0.4 发现并修复的缺陷（随本阶段一并落地）：
+
+| # | 级别 | 问题 | 修复措施 |
+| ---- | ---- | ---- | ---- |
+| B-08 | **高** | IRQ 汇编 stub 只把 IRQ0（`isr_32`）改为调用 `irq_dispatch`，向量 33..47 仍 `jmp isr_common` → 走向 `exception_dispatch`；IRQ1 一触发就 `EXCEPTION: irq(1)` + `KERNEL PANIC` | 16 个 IRQ stub 统一 `push 0/pushN/jmp irq_common`；`make test-keyboard` 覆盖 IRQ1 派发路径 |
+| B-09 | **高** | IRQ 路径直接 `call irq_dispatch` 而不保存通用寄存器，`iretq` 后被中断的代码带着被破坏的 caller-saved 寄存器继续执行 → 随机 #GP（表现为内存初始化的 `bit_used` 解引用垃圾指针） | `irq_common` 参照 `isr_common` 保存/恢复 15 个通用寄存器，并在 `call` 前强制 16 字节栈对齐 |
+
+### v0.5 — Process + Thread + Scheduler（内核侧核心已完成）
+- [x] Task/Thread 结构与状态机（`process/thread.rs`：`Thread` + `ThreadState`；`process/pid.rs` PID 分配）
+- [x] 内核级上下文切换接入调度流程（`process/context.rs` 转发 `arch/x86_64/context.rs`，含 RFLAGS 保存）
+- [x] 就绪队列与调度策略抽象（`scheduler/queue.rs` 定长环形队列；`scheduler/round_robin.rs` 200ms 时间片）
+- [x] Round Robin 调度器 + PIT 时间片抢占（`scheduler/scheduler.rs`，IRQ0 → `on_tick` → `switch`）
 - [ ] 基础 IPC（pipe）
-- [ ] 验收：≥3 个内核任务轮转且不崩溃
+- [x] 验收（自动化）：`make test-scheduler`（pid 1/2/3 三个内核任务依次运行 + `sched: switch pid=3 -> 0` + `sched: round-robin wrap PASS`）；
+      `context: switch PASS` 随 `make test-memory` 断言
+
+v0.5 踩坑记录（已修复，建议保留）：
+
+| # | 级别 | 问题 | 修复措施 |
+| ---- | ---- | ---- | ---- |
+| B-10 | **高** | 上下文切换未保存 `RFLAGS`。调度切换发生在 IRQ0 中断上下文内（中断门已清 IF），切出后 IF 永久为 0 → 后续 IRQ 不再递交，调度与心跳同时停摆 | `context_switch` 加入 `pushfq`/`popfq`；`init_context` 的新上下文默认 `RFLAGS=0x202`（IF=1） |
+| B-11 | **高** | IRQ 的 EOI 原先在回调**之后**发出；IRQ0 回调会触发任务切换，本调用栈很晚才恢复 → PIC 不再递交 IRQ0 | `irq_dispatch` 改为「先 EOI，后分发」（中断门已清 IF，提前 EOI 无嵌套风险） |
+| B-12 | 中 | 启动上下文切出后没有回到就绪队列，Round Robin 永远绕不回 pid 0，`start()` 无法返回 | `start()` 在切出前把 pid 0 压回队尾 |
 
 ### v0.6 — Syscall + User Space
 - [ ] syscall 指令入口（`syscall`/`sysret` 或 `int 0x80`）
@@ -258,3 +296,6 @@ qemu-system-x86_64 -machine q35 -m 512M -serial stdio -display none \
 | ---- | ---- |
 | 2026-10-06 | 第一阶段初稿：需求、依赖、workspace 规划、v0.1–v1.0 任务清单、测试/QEMU/Issue 规划 |
 | 2026-10-07 | v0.3 完成：内存管理（帧分配器/页表 Mapper/内核堆）；新增 test-memory、test-pagefault 验收目标；补记 B-06/B-07 |
+| 2026-10-08 | v0.4 完成：PIC/PIT 100Hz/PS-2 键盘/上下文切换原语；新增 test-keyboard 验收目标；补记 B-08/B-09；H-04/H-05 主机侧 Go 工具仍待开工 |
+| 2026-10-08 | v0.5 内核侧落地：线程模型/PID/就绪队列/Round Robin 时间片调度接入 PIT/IRQ0；新增 test-scheduler；补记 B-10/B-11/B-12；IPC 仍待做 |
+| 2026-10-08 | v0.4 收尾（H-04/H-05）：Go 测试编排器（testorch）+ 串口日志分析（serialmon）落地；新增 `make go-test` / `make test-orch`；测试脚本支持 `--ovmf-vars`/`--monitor`/`--timeout` 隔离与磁盘 `snapshot=on` 共享 |

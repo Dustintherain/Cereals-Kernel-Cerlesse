@@ -1,10 +1,11 @@
 //! IDT 中断描述符表（v0.2 实现；v0.4 扩展 IRQ 向量范围占位）
 //!
-//! 覆盖 CPU 保留的 0..32 异常向量；处理函数地址来自 `arch::x86_64::interrupt::handler_table`。
+//! 覆盖 CPU 保留的异常向量 0..31（32 个）与 IRQ 向量 32..47；处理函数地址来自
+//! `arch::x86_64::interrupt::handler_table`。
 //! #DF 使用 IST1（gdt.rs 中的双错专用栈），避免栈损坏时 triple fault。
 //!
-//! v0.4 目标：在现有 0..32 异常向量之上，预留 IRQ（典型 32..47）入口扩展点。
-//! 当前实现不直接安装 IRQ handler，仅提供常量 `IRQ_FIRST` / `IDT_SIZE` 供后续扩展引用。
+//! v0.4：IRQ 范围（32..47）的 stub 也安装到 IDT，全部指向 `irq_common` → `irq_dispatch`；
+//! IDT 容量由 `IDT_SIZE`（48）给出。
 
 use crate::arch::x86_64::gdt::KERNEL_CODE;
 use crate::arch::x86_64::interrupt::handler_table;
@@ -18,12 +19,8 @@ pub const NUM_VECTORS: usize = 32;
 /// #DF 向量号
 const VECTOR_DOUBLE_FAULT: usize = 8;
 
-/// 第一批 IRQ 向量起始值（PIC 传统映射下 IRQ0 常放在向量 32）。
-/// 当前阶段对齐 `arch::x86_64::interrupt::IRQ_FIRST`，供上层一致引用。
-pub const IRQ_FIRST: usize = NUM_VECTORS;
-
-/// IDT 表当前容量（槽位数）。v0.4 起扩展到 IRQ 范围（32..47）。
-pub const IDT_SIZE: usize = NUM_VECTORS + 16;
+/// IDT 表当前容量（槽位数）：异常 0..32 + IRQ 32..47。
+pub const IDT_SIZE: usize = 48;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

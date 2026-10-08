@@ -12,5 +12,13 @@
 //! 当前更实际的做法是：先保证 kernel 的 `cargo check --workspace` 干净，
 //! 再通过 QEMU 集成测试（串口断言）覆盖中断路径——这与 DEVELOPMENT.md 的测试方案一致。
 
-// 占位：暂不声明实际测试函数，避免引入不需要的依赖/构建目标。
-// 后续决定宿主侧测试方案后，再在此填充等价断言。
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_file_is_not_used_for_kernel_target() {
+        // 本模块当前仅作为上下文占位，kernel 二进制目标本身不直接运行此测试。
+        assert!(true);
+    }
+}

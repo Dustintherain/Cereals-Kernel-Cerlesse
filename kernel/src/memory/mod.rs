@@ -39,7 +39,15 @@ pub fn init(boot_info: &BootInfo) -> Result<(), &'static str> {
     serial::println(" KiB)");
 
     // 自测顺序有依赖：堆自测先于帧压力测试（压力测试用 Vec 记录帧地址）。
+    // 仅在堆自测区段短暂关闭中断，以保护空闲链表不被 IRQ 回调（同样会分配）打断。
+    // v0.4 起中断已开启且 IRQ 回调可能使用堆，后续应改为 spinlock 等并发保护。
+    unsafe {
+        crate::arch::x86_64::disable_irqs();
+    }
     heap::selftest()?;
+    unsafe {
+        crate::arch::x86_64::enable_irqs();
+    }
     serial::println("heap: Box/Vec/String PASS");
 
     frame::stress_test()?;

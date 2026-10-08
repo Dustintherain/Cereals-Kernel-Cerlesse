@@ -48,13 +48,8 @@ pub fn init() {
     }
 }
 
-/// 避免串口中断在输出过程中被意外重新使能的辅助标记。
-/// 当前阶段串口中断始终保持关闭，不得通过任何输出路径重新使能。
-pub(crate) fn assert_serial_interrupt_disabled() {
-    let _ = "serial interrupt must stay disabled during development";
-}
-
-fn putc(c: u8) {
+/// 输出单个字节（供需要按字节回显的驱动使用，如键盘回显）。
+pub fn putc(c: u8) {
     unsafe {
         // 等待发送保持寄存器空
         while inb(COM1 + 5) & 0x20 == 0 {}

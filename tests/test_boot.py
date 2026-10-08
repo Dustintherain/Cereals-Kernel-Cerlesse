@@ -33,6 +33,17 @@ def parse_args() -> argparse.Namespace:
         help="串口必须出现的字符串（可重复）；默认断言 'Kernel started!'",
     )
     parser.add_argument("--serial-log", default=None, help="串口日志输出路径")
+    parser.add_argument(
+        "--ovmf-vars",
+        default=None,
+        help="OVMF_VARS 副本路径（并行编排时按场景隔离，默认 build/OVMF_VARS.fd）",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=TIMEOUT_SECONDS,
+        help="QEMU 观察窗口秒数（默认 40）",
+    )
     return parser.parse_args()
 
 
@@ -41,6 +52,7 @@ def main() -> int:
     disk = Path(args.disk)
     expects = [s.encode() for s in (args.expect or ["Kernel started!"])]
     serial_log = Path(args.serial_log) if args.serial_log else BUILD / "serial.log"
+    timeout = args.timeout
 
     if shutil.which("qemu-system-x86_64") is None:
         print("FAIL: missing tool qemu-system-x86_64")
@@ -50,7 +62,8 @@ def main() -> int:
         return 2
 
     BUILD.mkdir(parents=True, exist_ok=True)
-    vars_copy = BUILD / "OVMF_VARS.fd"
+    vars_copy = Path(args.ovmf_vars) if args.ovmf_vars else BUILD / "OVMF_VARS.fd"
+    vars_copy.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(OVMF_VARS_SRC, vars_copy)
 
     cmd = [
@@ -59,7 +72,9 @@ def main() -> int:
         "-m", "512M",
         "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
         "-drive", f"if=pflash,format=raw,file={vars_copy}",
-        "-drive", f"format=raw,file={disk}",
+        # snapshot=on：磁盘以临时写时复制方式打开，不占用镜像写锁，
+        # 多个并行场景可共享同一磁盘镜像（H-04 编排器），且不污染原始镜像。
+        "-drive", f"format=raw,file={disk},snapshot=on",
         "-serial", "stdio",
         "-display", "none",
         "-no-reboot",
@@ -69,7 +84,7 @@ def main() -> int:
     timed_out = False
     try:
         result = subprocess.run(
-            cmd, capture_output=True, timeout=TIMEOUT_SECONDS, check=False
+            cmd, capture_output=True, timeout=timeout, check=False
         )
         output = result.stdout + result.stderr
     except subprocess.TimeoutExpired as expired:
@@ -86,7 +101,7 @@ def main() -> int:
     for exp in missing:
         print(f"FAIL: {exp!r} not found on serial (log: {serial_log})")
     if timed_out:
-        print(f"  (qemu was killed after {TIMEOUT_SECONDS}s)")
+        print(f"  (qemu was killed after {timeout}s)")
     tail = output[-4000:]
     print("--- serial tail ---")
     sys.stdout.buffer.write(tail)

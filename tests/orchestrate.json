@@ -1,0 +1,128 @@
+{
+  "concurrency": 2,
+  "scenarios": [
+    {
+      "name": "boot",
+      "cmd": [
+        "python3", "tests/test_boot.py",
+        "--serial-log", "build/orch/boot/serial.log",
+        "--ovmf-vars", "build/orch/boot/OVMF_VARS.fd",
+        "--timeout", "30",
+        "--expect", "Kernel started!"
+      ],
+      "serialLog": "build/orch/boot/serial.log",
+      "expect": ["Kernel started!"],
+      "timeoutSec": 60
+    },
+    {
+      "name": "memory",
+      "cmd": [
+        "python3", "tests/test_boot.py",
+        "--serial-log", "build/orch/memory/serial.log",
+        "--ovmf-vars", "build/orch/memory/OVMF_VARS.fd",
+        "--timeout", "30",
+        "--expect", "Kernel started!",
+        "--expect", "heap: Box/Vec/String PASS",
+        "--expect", "frame: stress PASS",
+        "--expect", "paging: map/unmap PASS",
+        "--expect", "context: switch PASS"
+      ],
+      "serialLog": "build/orch/memory/serial.log",
+      "expect": [
+        "Kernel started!",
+        "heap: Box/Vec/String PASS",
+        "frame: stress PASS",
+        "paging: map/unmap PASS",
+        "context: switch PASS"
+      ],
+      "timeoutSec": 60
+    },
+    {
+      "name": "exception",
+      "cmd": [
+        "python3", "tests/test_boot.py",
+        "--disk", "build/disk-exception.img",
+        "--serial-log", "build/orch/exception/serial.log",
+        "--ovmf-vars", "build/orch/exception/OVMF_VARS.fd",
+        "--timeout", "30",
+        "--expect", "Kernel started!",
+        "--expect", "EXCEPTION: divide error"
+      ],
+      "serialLog": "build/orch/exception/serial.log",
+      "expect": ["Kernel started!", "EXCEPTION: divide error"],
+      "allowPanic": true,
+      "timeoutSec": 60
+    },
+    {
+      "name": "pagefault",
+      "cmd": [
+        "python3", "tests/test_boot.py",
+        "--disk", "build/disk-pagefault.img",
+        "--serial-log", "build/orch/pagefault/serial.log",
+        "--ovmf-vars", "build/orch/pagefault/OVMF_VARS.fd",
+        "--timeout", "30",
+        "--expect", "Kernel started!",
+        "--expect", "EXCEPTION: page fault",
+        "--expect", "CR2=0x500000000000"
+      ],
+      "serialLog": "build/orch/pagefault/serial.log",
+      "expect": ["Kernel started!", "EXCEPTION: page fault", "CR2=0x500000000000"],
+      "allowPanic": true,
+      "timeoutSec": 60
+    },
+    {
+      "name": "keyboard",
+      "cmd": [
+        "python3", "tests/test_keyboard.py",
+        "--disk", "build/disk.img",
+        "--serial-log", "build/orch/keyboard/serial.log",
+        "--ovmf-vars", "build/orch/keyboard/OVMF_VARS.fd",
+        "--monitor", "build/orch/keyboard/monitor.sock",
+        "--timeout", "30",
+        "--key", "a",
+        "--key", "b",
+        "--expect", "KBIRQ enabled",
+        "--expect", "KBIRQ ENTRY",
+        "--expect", "KB a",
+        "--expect", "KBIRQ EXIT",
+        "--expect", "IRQ0_heartbeat tick="
+      ],
+      "serialLog": "build/orch/keyboard/serial.log",
+      "expect": [
+        "KBIRQ enabled",
+        "KBIRQ ENTRY",
+        "KB a",
+        "KBIRQ EXIT",
+        "IRQ0_heartbeat tick="
+      ],
+      "timeoutSec": 75
+    },
+    {
+      "name": "scheduler",
+      "cmd": [
+        "python3", "tests/test_boot.py",
+        "--serial-log", "build/orch/scheduler/serial.log",
+        "--ovmf-vars", "build/orch/scheduler/OVMF_VARS.fd",
+        "--timeout", "30",
+        "--expect", "Kernel started!",
+        "--expect", "sched: spawn pid=1 name=task_a",
+        "--expect", "task_a: entered",
+        "--expect", "task_b: entered",
+        "--expect", "task_c: entered",
+        "--expect", "sched: switch pid=3 -> 0",
+        "--expect", "sched: round-robin wrap PASS"
+      ],
+      "serialLog": "build/orch/scheduler/serial.log",
+      "expect": [
+        "Kernel started!",
+        "sched: spawn pid=1 name=task_a",
+        "task_a: entered",
+        "task_b: entered",
+        "task_c: entered",
+        "sched: switch pid=3 -> 0",
+        "sched: round-robin wrap PASS"
+      ],
+      "timeoutSec": 60
+    }
+  ]
+}

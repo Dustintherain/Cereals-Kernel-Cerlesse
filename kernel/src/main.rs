@@ -1,7 +1,14 @@
-//! Cerlesse OS 内核入口（v0.1 实现；v0.2 GDT/IDT；v0.3 内存管理；v0.4 中断/Timer）
+//! Cerlesse OS 内核入口（v0.1 实现；v0.2 GDT/IDT；v0.3 内存管理；v0.4 中断/Timer/键盘）
 //!
-//! 启动链：UEFI Bootloader 加载本内核 ELF → ExitBootServices → 跳转 `_start`，
+//! 启动链：UEFI Bootloader 加载内核 ELF → ExitBootServices → 跳转 `_start`，
 //! RDI 指向 `shared::BootInfo`。本文件建立自己的栈并进入 `kernel_main`。
+//!
+//! v0.4 验收（串口观测）：
+//! - `PIC initialized` / `keyboard initialized` / `KBIRQ enabled`：中断与外设初始化完成；
+//! - `IRQ0_heartbeat tick=<n>`：PIT（100Hz）每 100 tick（1 秒）打印一次，tick 递增；
+//! - `KBIRQ ENTRY` / `KB a` / `KBIRQ EXIT`：按键经 IRQ1 → 扫描码解码 → 串口回显。
+//!
+//! 初始化完成后进入 `hlt` 空闲循环，中断由硬件持续递交（不再是阻塞式观测窗口）。
 
 #![no_std]
 #![no_main]
@@ -12,6 +19,8 @@ mod arch;
 mod driver;
 mod interrupt;
 mod memory;
+mod process;
+mod scheduler;
 mod time;
 
 use core::arch::global_asm;
@@ -44,13 +53,15 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
         core::arch::asm!("cli", options(nomem, nostack));
     }
     driver::serial::init();
-    driver::serial::println("Cerlesse kernel v0.3");
+    driver::serial::println("Cerlesse kernel v0.4");
 
     // 自建 GDT（含 TSS）+ IDT，接管异常处理
     arch::x86_64::init();
     driver::serial::println("GDT/TSS + IDT loaded");
 
-    // v0.4: 初始化中断控制器（PIC），再配置 PIT/IRQ0，并打开处理器中断。
+    // v0.4：中断控制器 → PIT/IRQ0 → 键盘/IRQ1 → 打开 IF。
+    // 注意：所有 IRQ 回调必须在 `enable_irqs()` 之前注册完毕，
+    // 否则第一次中断会分发给空槽位（当前实现会安全丢弃，但属于配置错误）。
     {
         let mut controller = interrupt::controller::Controller::new(
             interrupt::controller::ControllerKind::Pic,
@@ -58,20 +69,25 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
         controller.init_pic();
         driver::serial::println("PIC initialized");
 
-        // v0.4: 配置 PIT 通道 0、启用 IRQ0、打开 IF，使 PIT 周期性中断可递交。
-        {
-            use time::timer;
-            // 通道 0、模式 3、重装载值示例（串口心跳频率由此决定）。
-            unsafe { timer::set_channel0_reload(0xFFFF_u16); }
-            controller.enable_irq(0);
+        // PIT 通道 0：100Hz（10ms/tick），供 tick 计数与心跳。
+        unsafe { time::timer::set_channel0_reload(time::timer::TICK_RELOAD_100HZ) };
+        controller.enable_irq(0);
 
-            driver::serial::println(
-                "PIT channel0 configured; IRQ0 enabled on PIC; IF enabled",
-            );
+        // 键盘控制器初始化（排空输出缓冲 + 打开 IRQ1 使能位），
+        // 必须在启用 PIC 的 IRQ1 之前完成，否则残留字节会产生伪中断。
+        unsafe { driver::keyboard::init() };
+        driver::serial::println("keyboard initialized");
 
-            // 打开处理器中断标志（IF），允许可屏蔽中断递交。
-            unsafe { arch::x86_64::enable_irqs(); }
-        }
+        controller.enable_irq(1);
+        driver::serial::println("KBIRQ enabled");
+
+        // 注册回调：IRQ0（PIT tick + 心跳）、IRQ1（键盘回显）。
+        interrupt::irq::register_irq0_pit_callback();
+        interrupt::irq::register_keyboard_callback();
+
+        // 打开处理器中断标志（IF），PIT 与键盘中断开始递交。
+        unsafe { arch::x86_64::enable_irqs() };
+        driver::serial::println("PIT 100Hz + PIC IRQ0/IRQ1 unmasked; IF enabled");
     }
 
     if boot_info.is_null() {
@@ -98,9 +114,17 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
         halt();
     }
 
+    // v0.4：内核级上下文切换原语自测（为 v0.5 的任务/调度铺路）。
+    if let Err(err) = arch::x86_64::context::selftest() {
+        driver::serial::print("context: FAIL: ");
+        driver::serial::println(err);
+        halt();
+    }
+    driver::serial::println("context: switch PASS");
+
     driver::serial::println("Kernel started!");
 
-    // v0.4：简单观测当前 IF 状态，确认中断使能路径已接通。
+    // v0.4：观测 IF 状态，确认中断使能路径已接通。
     {
         let enabled = arch::x86_64::irqs_enabled();
         driver::serial::print("IF=");
@@ -133,6 +157,48 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
         }
     }
 
+    // v0.5：内核线程 + Round Robin 调度（PIT/IRQ0 驱动时间片抢占）。
+    {
+        use crate::scheduler::scheduler as sched;
+
+        sched::init();
+        sched::spawn("task_a", task_a);
+        sched::spawn("task_b", task_b);
+        sched::spawn("task_c", task_c);
+        driver::serial::println("sched: tasks spawned; starting round robin");
+
+        // 切出到第一个内核任务；本轮 Round Robin 绕回 pid 0 时从这里继续。
+        sched::start();
+
+        let stats = sched::stats();
+        sched::report();
+        if stats.started && stats.switches >= 4 {
+            driver::serial::println("sched: round-robin wrap PASS");
+        } else {
+            driver::serial::println("sched: round-robin wrap FAIL");
+            halt();
+        }
+    }
+
+    // 之后的执行由调度器接管：每个任务在 hlt 中等待下一个时间片。
+    halt()
+}
+
+/// v0.5 示例内核任务 A：进入后打印一次，随后在 hlt 中等待时间片到期被抢占。
+extern "C" fn task_a() -> ! {
+    driver::serial::println("task_a: entered");
+    halt()
+}
+
+/// v0.5 示例内核任务 B。
+extern "C" fn task_b() -> ! {
+    driver::serial::println("task_b: entered");
+    halt()
+}
+
+/// v0.5 示例内核任务 C。
+extern "C" fn task_c() -> ! {
+    driver::serial::println("task_c: entered");
     halt()
 }
 

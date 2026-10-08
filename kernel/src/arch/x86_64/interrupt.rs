@@ -4,19 +4,12 @@
 //! 其余补 0；随后压向量号、统一保存 15 个通用寄存器，调用 `exception_dispatch`。
 //! 栈帧布局与 `ExceptionFrame` 严格一一对应。
 //!
-//! v0.4 目标：在此基础上预留 IRQ（32..47）汇编 stub 扩展位，供后续 IRQ handler 端接使用。
-//! 当前实现先保留 `NUM_VECTORS` 为 32（仅异常），并提供 `IRQ_FIRST` 语义供上层引用。
+//! v0.4 目标：IRQ（32..47）汇编 stub 已实装（IRQ0 单独展开，余者走 isr_common）。
+//! IRQ 分发由 `irq_dispatch` 负责，注册表见 `interrupt::irq`。
 
 use crate::arch::x86_64::idt::IDT_SIZE;
 use crate::driver::serial;
 use core::arch::{asm, global_asm};
-
-/// 处理的异常向量数（0..32）
-pub const NUM_VECTORS: usize = 32;
-
-/// 第一批 IRQ 向量起始值（PIC 传统映射下 IRQ0 常放在向量 32）。
-/// 当前阶段对齐 `arch::x86_64::idt::IRQ_FIRST`，供上层一致引用。
-pub const IRQ_FIRST: usize = NUM_VECTORS;
 
 /// 异常时的完整栈帧（自栈底向栈顶）。
 /// 布局顺序 = isr_common 的 push 逆序，低地址在前。
@@ -82,62 +75,71 @@ global_asm!(
     ".global isr_30", "isr_30:", "push 0", "push 30", "jmp isr_common",
     ".global isr_31", "isr_31:", "push 0", "push 31", "jmp isr_common",
 
-    // ---- IRQ stub（v0.4 扩充到 32..47）：IRQ0 单独展开，余者走 isr_common ----,
-    	".global isr_32\n",
-    "isr_32:\n",
-    "push 0\n",
-    "push 32\n",
-    "mov rdi, [rsp]\n",
-    "push rax\n",
-    "push rbx\n",
-    "push rcx\n",
-    "push rdx\n",
-    "push rbp\n",
-    "push rsi\n",
-    "push rdi\n",
-    "push r8\n",
-    "push r9\n",
-    "push r10\n",
-    "push r11\n",
-    "push r12\n",
-    "push r13\n",
-    "push r14\n",
-    "push r15\n",
-    "mov rbx, rsp\n",
-    "call irq_dispatch\n",
-    "mov rsp, rbx\n",
-    "pop r15\n",
-    "pop r14\n",
-    "pop r13\n",
-    "pop r12\n",
-    "pop r11\n",
-    "pop r10\n",
-    "pop r9\n",
-    "pop r8\n",
-    "pop rdi\n",
-    "pop rsi\n",
-    "pop rbp\n",
-    "pop rdx\n",
-    "pop rcx\n",
-    "pop rbx\n",
-    "pop rax\n",
-    "add rsp, 16\n",
-    "iretq\n",
-    ".global isr_33", "isr_33:", "push 0", "push 33", "jmp isr_common",
-    ".global isr_34", "isr_34:", "push 0", "push 34", "jmp isr_common",
-    ".global isr_35", "isr_35:", "push 0", "push 35", "jmp isr_common",
-    ".global isr_36", "isr_36:", "push 0", "push 36", "jmp isr_common",
-    ".global isr_37", "isr_37:", "push 0", "push 37", "jmp isr_common",
-    ".global isr_38", "isr_38:", "push 0", "push 38", "jmp isr_common",
-    ".global isr_39", "isr_39:", "push 0", "push 39", "jmp isr_common",
-    ".global isr_40", "isr_40:", "push 0", "push 40", "jmp isr_common",
-    ".global isr_41", "isr_41:", "push 0", "push 41", "jmp isr_common",
-    ".global isr_42", "isr_42:", "push 0", "push 42", "jmp isr_common",
-    ".global isr_43", "isr_43:", "push 0", "push 43", "jmp isr_common",
-    ".global isr_44", "isr_44:", "push 0", "push 44", "jmp isr_common",
-    ".global isr_45", "isr_45:", "push 0", "push 45", "jmp isr_common",
-    ".global isr_46", "isr_46:", "push 0", "push 46", "jmp isr_common",
-    ".global isr_47", "isr_47:", "push 0", "push 47", "jmp isr_common",
+    // ---- IRQ stub（v0.4：32..47 全部走 irq_common） ----
+    // 每个 stub 压入 (error_code=0, vector) 两个 qword，然后跳入 irq_common。
+    // 注意：IRQ 绝不能落到 isr_common —— 那会走 exception_dispatch，
+    // 把正常的外设中断当成未处理异常而 panic（v0.4 曾因此崩溃）。
+    ".global isr_32", "isr_32:", "push 0", "push 32", "jmp irq_common",
+    ".global isr_33", "isr_33:", "push 0", "push 33", "jmp irq_common",
+    ".global isr_34", "isr_34:", "push 0", "push 34", "jmp irq_common",
+    ".global isr_35", "isr_35:", "push 0", "push 35", "jmp irq_common",
+    ".global isr_36", "isr_36:", "push 0", "push 36", "jmp irq_common",
+    ".global isr_37", "isr_37:", "push 0", "push 37", "jmp irq_common",
+    ".global isr_38", "isr_38:", "push 0", "push 38", "jmp irq_common",
+    ".global isr_39", "isr_39:", "push 0", "push 39", "jmp irq_common",
+    ".global isr_40", "isr_40:", "push 0", "push 40", "jmp irq_common",
+    ".global isr_41", "isr_41:", "push 0", "push 41", "jmp irq_common",
+    ".global isr_42", "isr_42:", "push 0", "push 42", "jmp irq_common",
+    ".global isr_43", "isr_43:", "push 0", "push 43", "jmp irq_common",
+    ".global isr_44", "isr_44:", "push 0", "push 44", "jmp irq_common",
+    ".global isr_45", "isr_45:", "push 0", "push 45", "jmp irq_common",
+    ".global isr_46", "isr_46:", "push 0", "push 46", "jmp irq_common",
+    ".global isr_47", "isr_47:", "push 0", "push 47", "jmp irq_common",
+
+    // ---- IRQ 统一入口 ----
+    // 栈布局（低地址在前）：[GPRs][vector][error_code][rip][cs][rflags][rsp][ss]
+    // 必须像 isr_common 一样保存/恢复全部通用寄存器：IRQ 会打断任意内核代码，
+    // 若直接调用 irq_dispatch 而不保存 caller-saved 寄存器，iretq 返回后
+    // 被打断的代码会带着被破坏的寄存器继续跑（v0.4 曾因此出现随机 #GP）。
+    "irq_common:",
+    "push rax",
+    "push rbx",
+    "push rcx",
+    "push rdx",
+    "push rbp",
+    "push rsi",
+    "push rdi",
+    "push r8",
+    "push r9",
+    "push r10",
+    "push r11",
+    "push r12",
+    "push r13",
+    "push r14",
+    "push r15",
+    "mov rbx, rsp",       // rbx = &IrqFrame（rbx 已入栈，稍后由 pop 恢复）
+    "mov rdi, rbx",       // 第一参数 = &IrqFrame
+    "and rsp, -16",       // SysV：call 前 rsp 必须 16 字节对齐
+    "call irq_dispatch",
+    "mov rsp, rbx",       // 丢弃对齐偏移，回到帧顶
+    "pop r15",
+    "pop r14",
+    "pop r13",
+    "pop r12",
+    "pop r11",
+    "pop r10",
+    "pop r9",
+    "pop r8",
+    "pop rdi",
+    "pop rsi",
+    "pop rbp",
+    "pop rdx",
+    "pop rcx",
+    "pop rbx",
+    "pop rax",
+    "add rsp, 16",        // 弹出 vector + error_code
+    "iretq",
+    "\n",
 
     // ---- 统一入口：保存寄存器 → 对齐栈 → 调 Rust 分发 → 恢复 → iretq ----
     "isr_common:",
@@ -228,7 +230,6 @@ extern "C" {
     fn isr_45();
     fn isr_46();
     fn isr_47();
-    fn irq_dispatch();
 }
 
 /// 异常/IRQ 处理入口地址表（idt.rs 消费）。

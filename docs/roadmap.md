@@ -1,8 +1,8 @@
 # 总体开发路线图（第一阶段）
 
 - 阶段：第一阶段 / 路线规划
-- 最后更新：2026-10-06
-- 状态：✅ 已完成
+- 最后更新：2026-10-07
+- 状态：✅ 已完成（2026-10-07 补记 docs 完善进度）
 
 > 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
 
@@ -51,8 +51,8 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
 | **v0.1 ✅** | Bootloader + Rust Kernel（2026-10-06 QEMU 验收通过） | boot.md |
 | **v0.2 ✅** | GDT + IDT + Exception（2026-10-06 验收通过） | boot.md / memory.md |
 | **v0.3 ✅** | Physical/Virtual Memory + Heap（2026-10-07 验收通过；高半区映射移至 v0.6，ADR-009） | memory.md |
-| **v0.4** | Interrupt + Timer + Keyboard | drivers.md |
-| **v0.5** | Process + Thread + Scheduler | process.md |
+| **v0.4 ✅** | Interrupt + Timer + Keyboard（2026-10-08 验收通过）；含上下文切换原语 | drivers.md |
+| **v0.5 🟡** | Process + Thread + Scheduler（2026-10-08 内核侧核心完成：线程模型 + 上下文切换 + Round Robin 时间片调度；IPC 待做） | process.md |
 | **v0.6** | Syscall + User Space | syscall.md |
 | **v0.7** | VFS + RAMFS + ELF | filesystem.md / syscall.md |
 | **v0.8** | Driver + PCI + Disk | drivers.md |
@@ -64,11 +64,11 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
 ## 4. 阶段划分（与文档对应）
 
 1. **第一阶段（已完成）**：架构 + 路线 + 结构 + 文件框架。
-2. **第二阶段（v0.1–v0.2）**：Boot、GDT/IDT、异常处理 —— 编写 boot.md。
-3. **第三阶段（v0.3–v0.4）**：内存与中断时钟 —— 编写 memory.md。
-4. **第四阶段（v0.5）**：进程/调度 —— 编写 process.md。
-5. **第五阶段（v0.6–v0.7）**：系统调用/用户态/文件系统 —— 编写 syscall.md、filesystem.md。
-6. **第六阶段（v0.8–v0.9）**：驱动/PCI/网络/Shell —— 编写 drivers.md。
+2. **第二阶段（v0.1–v0.2）**：Boot、GDT/IDT、异常处理 —— 编写 boot.md（✅）。
+3. **第三阶段（v0.3–v0.4）**：内存与中断时钟 —— 编写 memory.md（✅），drivers.md 在 v0.4 中断控制器落地后补记当前状态（✅ 部分落地）。
+4. **第四阶段（v0.5）**：进程/调度 —— 编写 process.md（⬜ 待编写，规划细化完善后的占位）。
+5. **第五阶段（v0.6–v0.7）**：系统调用/用户态/文件系统 —— 编写 syscall.md、filesystem.md（⬜ 待编写，规划细化完善后的占位）。
+6. **第六阶段（v0.8–v0.9）**：驱动/PCI/网络/Shell —— 编写 drivers.md（v0.8/v0.9 部分尚未编写，见 drivers.md 第 2 节）。
 7. **第七阶段（v1.0）**：整合、安全机制、发布。
 
 ## 5. 修订记录
@@ -79,3 +79,6 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
 | 2026-10-06 | v0.1 完成，里程碑表标记 ✅ |
 | 2026-10-06 | v0.2 完成（GDT/IDT/异常 + B-01/B-05 修复），里程碑表标记 ✅ |
 | 2026-10-07 | v0.3 完成（帧分配器/页表 Mapper/内核堆 + B-06/B-07 修复），里程碑表标记 ✅ |
+| 2026-10-07 | 补完 v0.3 后尚未整理的文档：完善 docs/drivers.md / docs/syscall.md / docs/filesystem.md / docs/process.md，补记 DEVELOPMENT.md v0.4 验收项与 docs/README.md 索引状态 |
+| 2026-10-08 | v0.4 完成（PIC/PIT 100Hz/PS-2 键盘/上下文切换原语 + 自动化验收），里程碑表标记 ✅ |
+| 2026-10-08 | v0.5 内核侧核心完成（线程/PID/就绪队列/Round Robin 时间片抢占 + `make test-scheduler`），里程碑表标记 🟡（IPC 待做） |
