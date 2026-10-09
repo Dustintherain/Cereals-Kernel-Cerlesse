@@ -2,7 +2,8 @@
 
 - 阶段：第一阶段
 - 最后更新：2026-10-08
-- 状态：v0.1–v0.4 完成（含 H-04/H-05 主机侧 Go 工具）；v0.5 内核侧核心完成（线程模型 + 上下文切换 + Round Robin 时间片调度，已验收）；IPC 待做
+- 状态：v0.1–v0.5 全部完成（v0.4：中断/Timer/键盘/上下文切换 + H-04/H-05 Go 工具，`make go-test` / `make test-orch` 通过；v0.5：线程模型 + Round Robin 时间片调度 + IPC pipe 骨架，`make test-scheduler` / `make test-ipc` 通过）；
+  v0.6/v0.7 仍为占位文档，尚未进入编码
 - 关联文档：[docs/architecture.md](docs/architecture.md) · [docs/roadmap.md](docs/roadmap.md) · [docs/project-structure.md](docs/project-structure.md) · [docs/drivers.md](docs/drivers.md) · [docs/syscall.md](docs/syscall.md) · [docs/filesystem.md](docs/filesystem.md) · [docs/process.md](docs/process.md)
 
 ---
@@ -147,7 +148,7 @@ v0.3 发现并修复的缺陷（随本阶段一并落地）：
 | B-06 | 中 | v0.2 异常名表自向量 9 起错位一位（漏记 #9 coprocessor segment overrun）→ #PF 打印成 `reserved (#14)`、#GP 打印成 `page fault`；v0.2 的 #DE 测试刚好在错位之前 | 按 Intel SDM Table 6-1 重建 32 项名表；新增 `make test-pagefault` 覆盖 #PF 名称 + CR2 |
 | B-07 | 中 | 堆分配器首版把对齐前导 padding 计入已分配块大小 → 块尾越界覆盖后继空闲块头（空闲链表自环、分配死循环） | 块大小改为 `want - pad`；压力测试增加填充模式校验（抓重叠/越界），已回归 |
 
-### v0.4 — Interrupt + Timer + Keyboard
+### v0.4 — Interrupt + Timer + Keyboard ✅（2026-10-08 完成）
 - [x] 中断控制器骨架与 PIC 第一版（初始化、IRQ→向量映射、mask/EOI 原语）
 - [x] `mod interrupt` 绑定到 `controller / exception / irq` 子模块
 - [x] `kernel_main` 中接入 PIC 初始化（默认全屏蔽，不开启外设 IRQ）
@@ -162,19 +163,11 @@ v0.3 发现并修复的缺陷（随本阶段一并落地）：
 - [x] `kernel/src/driver/keyboard.rs`：PS/2 键盘控制器初始化（排空输出缓冲、打开 IRQ1 使能位）
 - [x] PS/2 键盘中断输入：IRQ1 扫描码接收 → set 1 解码（字母/数字/Shift/扩展前缀）→ 串口回显 `KB <字符>`
 - [x] 上下文切换原语（为 v0.5 铺路）：`arch::x86_64::context` 的 `switch_to` / `init_context` + 内核自测 `context: switch PASS`
-- [x] H-04 测试编排服务（Go，`tools-go/cmd/testorch` + `internal/orchestrator`）：读取 `tests/orchestrate.json`，
-      并行调度 6 个 QEMU 场景（并发度可配），每场景独占 OVMF_VARS/串口日志/monitor socket，
-      跑完后对串口日志做二次复核（期望子串 + 心跳/异常分析），失败则退出码非 0
-- [x] H-05 串口日志实时收集与分析（Go，`tools-go/cmd/serialmon` + `internal/serialparse`）：
-      tail -f 式跟随或 `-once` 快照分析，逐行分类（心跳/按键/调度/异常/PANIC/自测结果），
-      检测心跳 tick 回退/停摆，`-expect` 核对期望子串，退出码 0/1/2 区分通过/异常/用法错误
 - [x] 并行共享磁盘镜像：QEMU 改用 `snapshot=on`（临时写时复制），多场景并发不抢镜像写锁且不污染原镜像
-- [x] 主机侧单元测试：`make go-test`（`go vet` + `go test`，覆盖串口分类/心跳异常/期望核对/编排器并行与超时）
-- [x] 验收（自动化）：
-      `make test`（启动回归）PASS；`make test-memory`（堆/帧/页表 + 上下文切换自测）PASS；
-      `make test-keyboard`（QEMU monitor 注入真实按键 → `KBIRQ ENTRY` / `KB a` / `KBIRQ EXIT` + `IRQ0_heartbeat tick=`）PASS；
-      `make test-exception` / `make test-pagefault` 回归 PASS；
-      `make test-orch`（H-04：6 场景并行 + 串口二次复核）PASS；`make go-test` PASS
+- [x] H-04 测试编排器（Go）：`tools-go/cmd/testorch` + `internal/orchestrator`（场景配置校验、并发信号量、场景超时、串口日志二次复核）
+- [x] H-05 串口日志分析（Go）：`tools-go/cmd/serialmon` + `internal/serialparse`（行分类、心跳递增检测、`-expect` 核对、`-allow-panic`）
+- [x] 验收（自动化）：`make go-test`（`go vet` + `go test`）PASS；
+      `make test-orch`（编排器并行跑 6 个集成测试场景 + 串口二次复核）PASS（6 passed / 0 failed）
 
 v0.4 发现并修复的缺陷（随本阶段一并落地）：
 
@@ -183,14 +176,34 @@ v0.4 发现并修复的缺陷（随本阶段一并落地）：
 | B-08 | **高** | IRQ 汇编 stub 只把 IRQ0（`isr_32`）改为调用 `irq_dispatch`，向量 33..47 仍 `jmp isr_common` → 走向 `exception_dispatch`；IRQ1 一触发就 `EXCEPTION: irq(1)` + `KERNEL PANIC` | 16 个 IRQ stub 统一 `push 0/pushN/jmp irq_common`；`make test-keyboard` 覆盖 IRQ1 派发路径 |
 | B-09 | **高** | IRQ 路径直接 `call irq_dispatch` 而不保存通用寄存器，`iretq` 后被中断的代码带着被破坏的 caller-saved 寄存器继续执行 → 随机 #GP（表现为内存初始化的 `bit_used` 解引用垃圾指针） | `irq_common` 参照 `isr_common` 保存/恢复 15 个通用寄存器，并在 `call` 前强制 16 字节栈对齐 |
 
-### v0.5 — Process + Thread + Scheduler（内核侧核心已完成）
+### v0.5 — Process + Thread + Scheduler + IPC ✅（2026-10-08 完成）
 - [x] Task/Thread 结构与状态机（`process/thread.rs`：`Thread` + `ThreadState`；`process/pid.rs` PID 分配）
 - [x] 内核级上下文切换接入调度流程（`process/context.rs` 转发 `arch/x86_64/context.rs`，含 RFLAGS 保存）
 - [x] 就绪队列与调度策略抽象（`scheduler/queue.rs` 定长环形队列；`scheduler/round_robin.rs` 200ms 时间片）
 - [x] Round Robin 调度器 + PIT 时间片抢占（`scheduler/scheduler.rs`，IRQ0 → `on_tick` → `switch`）
-- [ ] 基础 IPC（pipe）
+- [x] 基础 IPC（pipe）—— v0.5 最后一块，单向 pipe 骨架已落地
+    - `kernel/src/ipc/pipe.rs`：固定容量（64B）环形缓冲单向管道，非阻塞语义
+      （写满短写、空读返回 0），创建/写入/读取均打印串口摘要日志
+- [x] IPC 模块占位（pipe 优先；channel / shared_memory 后续）：
+    - `kernel/src/ipc/pipe.rs`（已实现，含 `selftest`）
+    - `kernel/src/ipc/channel.rs`（尚未编写，保留位置；已更新占位说明）
+    - `kernel/src/ipc/shared_memory.rs`（尚未编写，保留位置；已更新占位说明）
 - [x] 验收（自动化）：`make test-scheduler`（pid 1/2/3 三个内核任务依次运行 + `sched: switch pid=3 -> 0` + `sched: round-robin wrap PASS`）；
       `context: switch PASS` 随 `make test-memory` 断言
+- [x] IPC 验收（v0.5 余项，2026-10-08 通过，新增 `make test-ipc`）：
+    - [x] 能创建单向 pipe（`pipe: create id=1 cap=64`）
+    - [x] 写端可写入、读端可读取已写字节（`pipe: write id=1 len=10` / `pipe: read id=1 len=10` + 读回比对）
+    - [x] 串口可观测到 pipe 创建/读写摘要日志
+    - [x] 调度器巡回不崩溃（pipe 自测在 Round Robin 巡回后执行，`pipe: selftest PASS`；调度回归仍通过）
+- [x] v0.5 收官标记（2026-10-08）：IPC 验收全部通过，v0.5 标记为整体完成；
+      channel / shared_memory 仍为后续占位，不在本轮范围
+
+### v0.4/v0.5 当前完成判断（2026-10-08 复核后更新）：
+- v0.4 整体标记为**已完成**：内核侧（PIC / PIT 100Hz / PS/2 键盘 / 上下文切换原语）已验收，
+  主机侧 H-04/H-05（testorch / serialmon）已落地，`make go-test` 与 `make test-orch`（6 场景并行）均实测通过。
+- v0.5 整体标记为**已完成**：线程模型 + 上下文切换 + Round Robin 时间片调度已验收，
+  IPC（pipe 骨架）已落代码并通过 `make test-ipc` 验收；channel / shared_memory 按计划保留为后续占位。
+- 下一开发顺序按 DEVELOPMENT.md 第 5 节版本顺序继续：进入 v0.6（syscall/user space）。
 
 v0.5 踩坑记录（已修复，建议保留）：
 
@@ -200,11 +213,24 @@ v0.5 踩坑记录（已修复，建议保留）：
 | B-11 | **高** | IRQ 的 EOI 原先在回调**之后**发出；IRQ0 回调会触发任务切换，本调用栈很晚才恢复 → PIC 不再递交 IRQ0 | `irq_dispatch` 改为「先 EOI，后分发」（中断门已清 IF，提前 EOI 无嵌套风险） |
 | B-12 | 中 | 启动上下文切出后没有回到就绪队列，Round Robin 永远绕不回 pid 0，`start()` 无法返回 | `start()` 在切出前把 pid 0 压回队尾 |
 
-### v0.6 — Syscall + User Space
+### v0.6 — Syscall + User Space（尚未开始编码；本次已把文档细化到可直接开工程度；当前仍为规划/占位）
 - [ ] syscall 指令入口（`syscall`/`sysret` 或 `int 0x80`）
+    - 当前草案优先候选 `syscall`/`sysret`，备选 `int 0x80` 风格入口
+    - 选型与寄存器/错误返回约定在编码时固化
 - [ ] `exit/write/read/open/close/fork/exec/wait/getpid/sleep`
+    - v0.6 最小集：`exit / write / getpid / sleep` 为核心目标
+    - `read / fork / exec / wait` 可在 v0.6 起步或留到 v0.7 完善
+    - `open / close` 留到 v0.7 与 VFS 对接
 - [ ] 用户地址空间隔离 + 最小 libc（`libc/`）
+    - 高半区映射与用户态隔离按 ADR-009 推迟到本阶段一并做
+    - `libc/` 至少提供 `start -> main` 胶水 + `exit / write / read` 等封装
 - [ ] 验收：用户态 `hello` 运行、退出码回收
+- [ ] v0.6 验收（细化后）：
+    - [ ] 用户态 `hello` 程序通过 ELF Loader 加载并运行
+    - [ ] 用户态隔离下 syscall 入口/返回可观察
+    - [ ] `exit` 能回收退出码（至少在串口可观察到）
+    - [ ] `fork`/`exec`/`wait` 基本流程可用（v0.7 完善前，v0.6 至少具备可验证骨架）
+    - [ ] `getpid`/`sleep` 可用
 
 ### v0.7 — VFS + RAMFS + ELF
 - [ ] VFS trait（FileSystem/File/Directory、Inode、Mount）
@@ -298,5 +324,11 @@ qemu-system-x86_64 -machine q35 -m 512M -serial stdio -display none \
 | 2026-10-07 | v0.3 完成：内存管理（帧分配器/页表 Mapper/内核堆）；新增 test-memory、test-pagefault 验收目标；补记 B-06/B-07 |
 | 2026-10-08 | v0.4 完成：PIC/PIT 100Hz/PS-2 键盘/上下文切换原语；新增 test-keyboard 验收目标；补记 B-08/B-09；H-04/H-05 主机侧 Go 工具仍待开工 |
 | 2026-10-08 | v0.5 内核侧落地：线程模型/PID/就绪队列/Round Robin 时间片调度接入 PIT/IRQ0；新增 test-scheduler；补记 B-10/B-11/B-12；IPC 仍待做 |
-| 2026-10-08 | v0.4 收尾（H-04/H-05）：Go 测试编排器（testorch）+ 串口日志分析（serialmon）落地；新增 `make go-test` / `make test-orch`；测试脚本支持 `--ovmf-vars`/`--monitor`/`--timeout` 隔离与磁盘 `snapshot=on` 共享 |
+| 2026-10-08 | v0.4 收尾（H-04/H-05）尚未落地：Go 测试编排器（testorch）/串口日志分析（serialmon）仍待编写；`make go-test` / `make test-orch` 仍未实现 |
+| 2026-10-08 | v0.4 收官：复核发现 H-04/H-05 代码已落地，实测 `make go-test`（vet + test）与 `make test-orch`（6 场景并行，6 passed / 0 failed）均通过，v0.4 标记为整体完成 |
+| 2026-10-08 | v0.5 收官：IPC（pipe）落地（`kernel/src/ipc/pipe.rs` 环形缓冲单向管道 + 串口摘要日志 + 自测），新增 `make test-ipc` 并入 `test-all` 与 orchestrate.json 编排场景；IPC 验收项全部通过，v0.5 标记为整体完成 |
+| 2026-10-08 | 本次 docs 迭代统一各阶段文档顶部元信息（阶段 / 最后更新 / 状态）、修订记录与本文件描述一致，保持索引与主开发文档一致 |
+| 2026-10-08 | 本次 v0.4 继续开发纠正了文档与代码库状态不一致点：H-04/H-05 实际尚未编写，因此 `tools-go/README.md` 与 DEVELOPMENT.md 的 v0.4 验收陈述已从“已落地”改为“尚未编写” |
+| 2026-10-08 | 继续 v0.5 后续开发前，统一当前未完成项表述：v0.5 仅剩 IPC(pipe/channel/shared_memory) 未落地；syscall.md 与 filesystem.md 仍为占位文档，尚未进入 v0.6/v0.7 编码 |
+| 2026-10-08 | 按开发流程复查后更新：v0.4 与 v0.5 都尚未在 DEVELOPMENT 里标记为整体“以完成”，因为当前尚未完成项尚未通过验收/尚未实现 |
 | 2026-10-08 | 本次 docs 迭代统一各阶段文档顶部元信息（阶段 / 最后更新 / 状态）、修订记录与本文件描述一致，保持索引与主开发文档一致 |

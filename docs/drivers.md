@@ -2,7 +2,7 @@
 
 - 阶段：第六阶段（v0.4 基础驱动已落地；v0.8–v0.9 完整驱动与网络待编写）
 - 最后更新：2026-10-08
-- 状态：🟡 部分完成（v0.4 中断控制器 + PIT Timer + PS/2 键盘 + 上下文切换原语 已验收，见 `kernel/src/interrupt/`、`kernel/src/time/`、`kernel/src/driver/keyboard.rs`、`kernel/src/arch/x86_64/context.rs`；v0.8–v0.9 驱动/PCI/磁盘/网络 尚未编写）
+- 状态：✅ v0.4 已完成（中断控制器 + PIT Timer + PS/2 键盘 + 上下文切换原语 + H-04/H-05 Go 工具，均已验收，见 `kernel/src/interrupt/`、`kernel/src/time/`、`kernel/src/driver/keyboard.rs`、`kernel/src/arch/x86_64/context.rs`、`tools-go/`；v0.8–v0.9 驱动/PCI/磁盘/网络 尚未编写，待对应阶段）
 
 > 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
 - 依赖：interrupt（IRQ 分发）、memory（DMA 缓冲）、process（网络可后置）
@@ -162,3 +162,4 @@ Socket API（最小集，v0.9）：
 | 2026-10-08 | v0.4 完成：IRQ stub 修正（B-08）、IRQ 入口保存寄存器（B-09）、PIT 100Hz、PS/2 键盘回显、上下文切换原语；新增 `make test-keyboard`；更新本文件当前状态与验收清单 |
 | 2026-10-08 | v0.4 最后一项 H-04/H-05 落地：Go 编排器 `testorch` + 串口分析器 `serialmon`；测试脚本支持并行隔离参数与磁盘 `snapshot=on`；新增 `make go-test` / `make test-orch`，验收清单全部勾选 |
 | 2026-10-08 | 本次 docs 迭代统一文档顶部元信息（阶段 / 最后更新 / 状态）与修订记录，保持与 DEVELOPMENT.md 与索引文档描述一致 |
+| 2026-10-08 | v0.4 复核收官：`make go-test` / `make test-orch` 实测通过，状态行由“部分完成”改为 v0.4 已完成（v0.8–v0.9 仍待对应阶段） |

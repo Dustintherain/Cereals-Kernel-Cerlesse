@@ -18,6 +18,7 @@ extern crate alloc;
 mod arch;
 mod driver;
 mod interrupt;
+mod ipc;
 mod memory;
 mod process;
 mod scheduler;
@@ -179,6 +180,15 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
             halt();
         }
     }
+
+    // v0.5：IPC（pipe 骨架）验收自测——在 Round Robin 巡回之后执行，
+    // 同时验证管道语义与「不给调度器引入新崩溃面」。
+    if let Err(err) = ipc::pipe::selftest() {
+        driver::serial::print("pipe: FAIL: ");
+        driver::serial::println(err);
+        halt();
+    }
+    driver::serial::println("pipe: selftest PASS");
 
     // 之后的执行由调度器接管：每个任务在 hlt 中等待下一个时间片。
     halt()

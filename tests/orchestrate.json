@@ -110,7 +110,11 @@
         "--expect", "task_b: entered",
         "--expect", "task_c: entered",
         "--expect", "sched: switch pid=3 -> 0",
-        "--expect", "sched: round-robin wrap PASS"
+        "--expect", "sched: round-robin wrap PASS",
+        "--expect", "pipe: create id=1 cap=64",
+        "--expect", "pipe: write id=1 len=10",
+        "--expect", "pipe: read id=1 len=10",
+        "--expect", "pipe: selftest PASS"
       ],
       "serialLog": "build/orch/scheduler/serial.log",
       "expect": [
@@ -120,7 +124,11 @@
         "task_b: entered",
         "task_c: entered",
         "sched: switch pid=3 -> 0",
-        "sched: round-robin wrap PASS"
+        "sched: round-robin wrap PASS",
+        "pipe: create id=1 cap=64",
+        "pipe: write id=1 len=10",
+        "pipe: read id=1 len=10",
+        "pipe: selftest PASS"
       ],
       "timeoutSec": 60
     }

@@ -6,31 +6,36 @@
 
 ## 当前进度
 
-**v0.5 内核侧核心已完成（2026-10-08）**：内核线程 + Round Robin 时间片调度。
-线程控制块与状态机（`process/thread.rs`）→ PID 分配（`process/pid.rs`）→ 定长环形就绪队列（`scheduler/queue.rs`）
-→ Round Robin 策略（`scheduler/round_robin.rs`，200ms 时间片）→ PIT 100Hz/IRQ0 驱动的抢占式调度
-（`scheduler/scheduler.rs`）：pid 1/2/3 三个内核任务严格轮转并绕回 pid 0（`sched: round-robin wrap PASS`）。
-
-**v0.4 已完成（2026-10-08）**：中断控制器 + Timer + 键盘 + 上下文切换原语。
+**v0.4 已完成（2026-10-08）**：中断控制器 + Timer + 键盘 + 上下文切换原语 + 主机侧 Go 工具（H-04/H-05）。
 PIC（8259A）初始化与 IRQ→向量（32..47）映射 → IRQ 分发注册表 → PIT 通道 0 以 **100Hz（10ms/tick）**
 产生 IRQ0 并维护 tick 计数（每 100 tick 打印一次 `IRQ0_heartbeat tick=<n>`）→
 PS/2 键盘：8042 初始化（排空输出缓冲、打开 IRQ1 使能位）→ IRQ1 扫描码读取 →
 set 1 解码（字母/数字/Shift/扩展前缀）→ 串口回显 `KB <字符>` →
 内核态上下文切换原语（callee-saved + 栈切换，含内核自测 `context: switch PASS`）。
 
-自动化验证：`make test` 回归 PASS；`make test-exception`（#DE）PASS；
+主机侧（H-04 testorch / H-05 serialmon）：`make go-test`（`go vet` + `go test`）PASS；
+`make test-orch`（Go 编排器并行跑 6 个集成测试场景 + 串口二次复核）PASS（6 passed / 0 failed）。
+
+自动化验证（内核侧）：`make test` 回归 PASS；`make test-exception`（#DE）PASS；
 `make test-memory`（堆/帧/页表 + 上下文切换自测）PASS；`make test-pagefault`（#PF 诊断 + CR2）PASS；
 `make test-keyboard`（经 QEMU monitor 注入真实按键，断言 `KB a` / `KBIRQ ENTRY` / `KBIRQ EXIT` / 心跳）PASS。
 
-`make test-scheduler`（v0.5 调度器）PASS；`make test-orch`（H-04 Go 编排器并行跑 6 场景 + 串口二次复核）PASS；
-`make go-test`（H-04/H-05 宿主侧 Go 单元测试）PASS。
+**v0.5 已完成（2026-10-08）**：内核线程 + Round Robin 时间片调度 + IPC（pipe 骨架）。
+线程控制块与状态机（`process/thread.rs`）→ PID 分配（`process/pid.rs`）→ 定长环形就绪队列（`scheduler/queue.rs`）
+→ Round Robin 策略（`scheduler/round_robin.rs`，200ms 时间片）→ PIT 100Hz/IRQ0 驱动的抢占式调度
+（`scheduler/scheduler.rs`）：pid 1/2/3 三个内核任务严格轮转并绕回 pid 0（`sched: round-robin wrap PASS`）。
+→ IPC 单向管道骨架（`ipc/pipe.rs`）：创建/写入/读取 + 串口摘要日志（`pipe: create/write/read`），
+自测在 Round Robin 巡回之后执行（`pipe: selftest PASS`），验证不给调度器引入新崩溃面。
+
+自动化验证：`make test-scheduler`（调度器轮转）PASS；`make test-ipc`（IPC 骨架验收）PASS；
+全部 7 个集成测试目标（`test-all` 的组成项）逐项 PASS。channel / shared_memory 仍为占位（按计划 pipe 之后再做）。
 
 v0.4/v0.5 期间修复的缺陷：异常向量 stub 之外的 IRQ 向量曾误入异常分发而 panic（B-08）、
 IRQ 路径未保存通用寄存器导致被打断的代码偶发 #GP（B-09）、
 上下文切换未保存 RFLAGS 导致切出中断上下文后 IF 永久为 0（B-10）、
 IRQ 的 EOI 时序错误导致 PIC 停摆（B-11）。
 
-下一步：v0.5 的 IPC（pipe），随后 v0.6 系统调用与用户态（见 [DEVELOPMENT.md](DEVELOPMENT.md) 任务清单）。
+下一步：按 DEVELOPMENT.md 第 5 节顺序继续——进入 v0.6（syscall + 用户空间隔离）。
 
 ## 文档入口
 
@@ -60,6 +65,7 @@ make test-memory     # v0.3/v0.4：断言帧分配器 / 内核堆 / 页表 Mappe
 make test-pagefault  # v0.3：访问未映射地址，断言 #PF 诊断 + CR2
 make test-keyboard   # v0.4：经 QEMU monitor 注入按键，断言 IRQ1 回显 + PIT 心跳
 make test-scheduler  # v0.5：断言 ≥3 个内核任务在 PIT 时间片下轮转
+make test-ipc        # v0.5：断言 pipe 创建/写入/读取摘要日志 + 自测 PASS
 make test-all        # 全部集成测试
 make go-test         # v0.4 H-04/H-05：Go 单元测试（串口分析 + 并行编排器）
 make test-orch       # v0.4 H-04：Go 编排器并行跑 6 个集成测试场景（tests/orchestrate.json）

@@ -13,7 +13,7 @@ OVMF_VARS ?= /usr/share/OVMF/OVMF_VARS.fd
 BOOT_EFI := target/x86_64-unknown-uefi/debug/boot.efi
 KERNEL_ELF := target/x86_64-unknown-none/debug/kernel
 
-.PHONY: help build boot kernel image image-exception image-pagefault run test test-exception test-memory test-pagefault test-keyboard test-scheduler test-all go-test test-orch clean
+.PHONY: help build boot kernel image image-exception image-pagefault run test test-exception test-memory test-pagefault test-keyboard test-scheduler test-ipc test-all go-test test-orch clean
 
 help:
 	@echo "targets:"
@@ -25,6 +25,7 @@ help:
 	@echo "  test-pagefault - v0.3: touch unmapped address, assert #PF diagnostics"
 	@echo "  test-keyboard - v0.4: inject keys via QEMU monitor, assert IRQ1 echo + PIT heartbeat"
 	@echo "  test-scheduler - v0.5: assert >=3 kernel tasks rotate under PIT time slices"
+	@echo "  test-ipc - v0.5: assert pipe create/write/read summary logs + selftest"
 	@echo "  test-all - run every integration test"
 	@echo "  go-test  - v0.4 H-04/H-05: Go unit tests for tools-go (host side)"
 	@echo "  test-orch - v0.4 H-04: run all 6 scenarios in parallel via Go orchestrator"
@@ -96,7 +97,7 @@ test-pagefault: image-pagefault
 		--expect "CR2=0x500000000000" \
 		--expect "KERNEL PANIC: unhandled exception"
 
-test-all: test test-exception test-memory test-pagefault test-keyboard test-scheduler
+test-all: test test-exception test-memory test-pagefault test-keyboard test-scheduler test-ipc
 
 # v0.5 验收：≥3 个内核任务在 PIT 时间片驱动下轮转（Round Robin）
 test-scheduler: image
@@ -109,6 +110,17 @@ test-scheduler: image
 		--expect "task_c: entered" \
 		--expect "sched: switch pid=3 -> 0" \
 		--expect "sched: round-robin wrap PASS"
+
+# v0.5 验收：IPC（pipe 骨架）创建/写入/读取串口摘要日志 + 自测，随 Round Robin 巡回后执行
+test-ipc: image
+	$(PYTHON) tests/test_boot.py \
+		--serial-log $(BUILD)/serial-ipc.log \
+		--expect "Kernel started!" \
+		--expect "sched: round-robin wrap PASS" \
+		--expect "pipe: create id=1 cap=64" \
+		--expect "pipe: write id=1 len=10" \
+		--expect "pipe: read id=1 len=10" \
+		--expect "pipe: selftest PASS"
 
 # v0.4 验收：PIT 心跳递增 + PS/2 键盘 IRQ1 扫描码回显（经 QEMU monitor 注入真实按键）
 test-keyboard: image

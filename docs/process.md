@@ -2,7 +2,7 @@
 
 - 阶段：第四阶段（v0.5）
 - 最后更新：2026-10-08
-- 状态：🟡 内核侧核心已完成（线程模型 + 上下文切换 + Round Robin 时间片调度，已自动化验收）；IPC（pipe）待做
+- 状态：✅ v0.5 已完成（线程模型 + 上下文切换 + Round Robin 时间片调度 + IPC pipe 骨架，均已自动化验收：`make test-scheduler` / `make test-ipc`）
 
 > 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
 - 依赖：memory.md（内核堆/地址空间语义）、interrupt（Timer 驱动调度、上下文切换原语）
@@ -56,7 +56,7 @@ sched: round-robin wrap PASS
 
 ### 1.3 未完成
 
-- 基础 IPC（pipe / channel / shared_memory）：本阶段待做。
+- 基础 IPC：pipe 骨架已落地（`kernel/src/ipc/pipe.rs`，`make test-ipc` 通过）；channel / shared_memory 仍为占位。
 - `Blocked` / `Terminated` 状态的实际语义（阻塞与退出）依赖 IPC 与进程退出路径。
 - 每进程多线程、地址空间切换（CR3）与用户态：v0.6。
 
@@ -121,17 +121,57 @@ Thread 结构至少包括（具体字段在实现时定）：
 - 后续可扩展 Priority / CFS-like / Real-time 调度策略，但不在 v0.5 实现。
 - Timer 中断驱动的时间片轮转是本阶段验收的关键可观察点。
 
-### 2.6 IPC（计划）
+### 2.6 IPC（v0.5 余项，按计划先做 pipe 骨架）
 
-- 基础 IPC 计划包括：pipe、channel、shared_memory。
-- 第一版优先实现 pipe，视需要再补 channel/shared_memory。
+IPC 是本阶段最后一块。按规划顺序，现在应先完成 pipe 骨架，再补验收。
+
+#### 2.6.1 规划原则
+
+- IPC 不追求完整语义，v0.5 目标是**可验证骨架**。
+- 第一版优先实现**单向 pipe**，后续再补 channel / shared_memory。
+- v0.5 IPC 目前不依赖用户态隔离，不引入文件描述符表完整语义。
+- 管道语义重点是：产生端 / 读取端、有限缓冲、阻塞/非阻塞雏形、在串口可观测。
+
+#### 2.6.2 模块位置
+
+- `kernel/src/ipc/pipe.rs` — 单向 pipe 骨架
+- `kernel/src/ipc/channel.rs` — 消息通道（后续）
+- `kernel/src/ipc/shared_memory.rs` — 共享内存（后续）
+
+#### 2.6.3 pipe 骨架的最小计划字段
+
+- 管道对象语义：
+  - `Pipe { write_end, read_end, buffer, ... }`
+  - 单向：一端写，一端读
+- 最小能力：
+  - 创建 pipe
+  - 写端写入有限字节
+  - 读端读取已写入字节
+  - 缓冲为空时读阻塞雏形（或立即返回 0/EAGAIN 风格语义，视 v0.5 复杂度决定）
+- 调试可观测点：
+  - 创建时打印管道标识
+  - 写入/读取时打印少量摘要，便于串口断言
+
+#### 2.6.4 v0.5 IPC 不做的事
+
+- 不在 v0.5 引入完整进程文件描述符表语义（v0.7 对接）
+- 不在 v0.5 做双向 pipe、select/poll、信号量、完整阻塞调度闭环
+- channel / shared_memory 仅保留占位，暂不编写
 
 ### 2.7 验收（v0.5）
 
 - [x] 两个内核任务可来回切换且不崩溃（`context::selftest`，随 `make test-memory` 断言）
 - [x] ≥3 个内核任务轮转且不崩溃（`make test-scheduler`：pid 1/2/3 依次运行）
 - [x] Timer 中断驱动的时间片轮转可观察到（`sched: switch` 日志每 200ms 一次）
-- [ ] 基础 IPC（pipe）至少具备可验证骨架
+- [x] 基础 IPC（pipe）至少具备可验证骨架（`make test-ipc`，2026-10-08 通过）
+  - [x] 能创建单向 pipe（`pipe: create id=1 cap=64`）
+  - [x] 写端可写入、读端可读取已写字节（`pipe: write id=1 len=10` / `pipe: read id=1 len=10` + 读回比对）
+  - [x] 串口可观测到 pipe 创建/读写摘要日志
+  - [x] 调度器巡回不崩溃（pipe 自测在 Round Robin 巡回之后执行，`pipe: selftest PASS` 且调度回归仍通过）
+- [x] v0.5 IPC 后续推进标记（2026-10-08 完成）：
+    - pipe 骨架已落代码并通过验收
+    - channel / shared_memory 仍为后续占位，不在本轮推进范围
+    - v0.5 据此标记为整体完成
 
 ## 3. 非目标 / 后续
 
@@ -146,5 +186,8 @@ Thread 结构至少包括（具体字段在实现时定）：
 | ---- | ---- |
 | 2026-10-06 | 第一阶段创建占位 |
 | 2026-10-07 | 补记路线细化：明确 Task/Thread/状态机/上下文切换/调度器/IPC 的计划字段，补充依赖说明（内存/Timer/上下文切换原语/中断线程安全），补充验收占位 |
-| 2026-10-08 | v0.5 内核侧落地：线程模型/PID/就绪队列/Round Robin 时间片调度接入 PIT/IRQ0，新增 `make test-scheduler`；记录 RFLAGS 与 EOI 时序两个关键踩坑；IPC 仍待做 |
+| 2026-10-08 | v0.5 内核侧落地：线程模型/PID/就绪队列/Round Robin 时间片调度接入 PIT/IRQ0，新增 `make test-scheduler`；记录 RFLAGS 与 EOI 时序两个关键踩坑；IPC 仍待做（未选型、未落代码、未定验收） |
+| 2026-10-08 | 继续 v0.5 后续开发前补记当前状态：v0.5 未完成项仅剩 IPC(pipe/channel/shared_memory)，本轮未开始编写代码，仅更新文档与开发文档流程约定一致 |
+| 2026-10-08 | 按开发文档流程继续 v0.5 后续计划细化：将 IPC 拆为三模块占位（pipe 优先），明确 v0.5 仅做 pipe 骨架；channel/shared_memory 仍为后续占位 |
+| 2026-10-08 | v0.5 收官：`kernel/src/ipc/pipe.rs` 落地（环形缓冲单向管道 + 串口摘要日志 + 自测），新增 `make test-ipc` 并入 `test-all` 与编排场景；验收项全部勾选，v0.5 标记为整体完成 |
 | 2026-10-08 | 本次 docs 迭代统一文档顶部元信息（阶段 / 最后更新 / 状态）与修订记录，保持与 DEVELOPMENT.md 与索引文档描述一致 |

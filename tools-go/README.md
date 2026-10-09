@@ -10,8 +10,8 @@
 
 | 工具 | 用途 | 版本 | 状态 |
 | ---- | ---- | ---- | ---- |
-| `cmd/testorch`（H-04） | 并行调度多个 QEMU 测试场景 + 串口日志二次复核 | v0.4 | ✅ 已落地 |
-| `cmd/serialmon`（H-05） | 实时收集/分析串口日志（tail -f 式分类 + 心跳异常检测） | v0.4 | ✅ 已落地 |
+| `cmd/testorch`（H-04） | 并行调度多个 QEMU 测试场景 + 串口日志二次复核 | v0.4 | ✅ 已完成（`cmd/testorch` + `internal/orchestrator`） |
+| `cmd/serialmon`（H-05） | 实时收集/分析串口日志（tail -f 式分类 + 心跳异常检测） | v0.4 | ✅ 已完成（`cmd/serialmon` + `internal/serialparse`） |
 
 模块：`cerlesse/tools`（仅标准库，无外部依赖）。
 
@@ -43,14 +43,15 @@ go run ./cmd/serialmon -file ../build/orch/exception/serial.log -once -allow-pan
 - `internal/orchestrator`：场景配置加载校验 + 并发执行（信号量并发、场景超时、
   WaitDelay 防孙进程挂住）、结果汇总。
 
-## 验收（v0.4）
+## 验收（v0.4，已通过）
 
-- [x] `make go-test`（`go vet` + `go test`）通过：覆盖串口分类/心跳异常/期望核对/编排器并行与超时
-- [x] `make test-orch` 通过：H-04 并行跑 6 个集成测试场景 + 串口日志二次复核
+- [x] `make go-test`（`go vet` + `go test`，2026-10-08 通过）
+- [x] `make test-orch`（H-04 并行跑 6 个集成测试场景 + 串口日志二次复核，2026-10-08 通过：6 passed / 0 failed）
 
 ## 修订记录
 
 | 日期 | 变更 |
 | ---- | ---- |
-| 2026-10-08 | 创建本文档，记录 H-04（testorch）/H-05（serialmon）落地状态与用法 |
+| 2026-10-08 | 创建本文档，记录 H-04（testorch）/H-05（serialmon）仍待编写 |
 | 2026-10-08 | 本次 docs 迭代统一文档顶部元信息（阶段 / 最后更新 / 状态）与修订记录，保持与 DEVELOPMENT.md 与索引文档描述一致 |
+| 2026-10-08 | H-04/H-05 落地并验收：`make go-test`（vet + test）与 `make test-orch`（6 场景并行，6 passed / 0 failed）均通过，表格与验收项改为已完成 |
