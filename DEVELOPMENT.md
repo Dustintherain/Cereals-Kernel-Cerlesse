@@ -324,11 +324,11 @@ qemu-system-x86_64 -machine q35 -m 512M -serial stdio -display none \
 | 2026-10-07 | v0.3 完成：内存管理（帧分配器/页表 Mapper/内核堆）；新增 test-memory、test-pagefault 验收目标；补记 B-06/B-07 |
 | 2026-10-08 | v0.4 完成：PIC/PIT 100Hz/PS-2 键盘/上下文切换原语；新增 test-keyboard 验收目标；补记 B-08/B-09；H-04/H-05 主机侧 Go 工具仍待开工 |
 | 2026-10-08 | v0.5 内核侧落地：线程模型/PID/就绪队列/Round Robin 时间片调度接入 PIT/IRQ0；新增 test-scheduler；补记 B-10/B-11/B-12；IPC 仍待做 |
-| 2026-10-08 | v0.4 收尾（H-04/H-05）尚未落地：Go 测试编排器（testorch）/串口日志分析（serialmon）仍待编写；`make go-test` / `make test-orch` 仍未实现 |
+| 2026-10-08 | v0.4 收尾（H-04/H-05）：复核发现测试编排器（testorch）/串口日志分析（serialmon）代码已落地，实测 `make go-test`（vet + test）与 `make test-orch`（6 场景并行，6 passed / 0 failed）均通过，v0.4 标记为整体完成 |
 | 2026-10-08 | v0.4 收官：复核发现 H-04/H-05 代码已落地，实测 `make go-test`（vet + test）与 `make test-orch`（6 场景并行，6 passed / 0 failed）均通过，v0.4 标记为整体完成 |
 | 2026-10-08 | v0.5 收官：IPC（pipe）落地（`kernel/src/ipc/pipe.rs` 环形缓冲单向管道 + 串口摘要日志 + 自测），新增 `make test-ipc` 并入 `test-all` 与 orchestrate.json 编排场景；IPC 验收项全部通过，v0.5 标记为整体完成 |
 | 2026-10-08 | 本次 docs 迭代统一各阶段文档顶部元信息（阶段 / 最后更新 / 状态）、修订记录与本文件描述一致，保持索引与主开发文档一致 |
-| 2026-10-08 | 本次 v0.4 继续开发纠正了文档与代码库状态不一致点：H-04/H-05 实际尚未编写，因此 `tools-go/README.md` 与 DEVELOPMENT.md 的 v0.4 验收陈述已从“已落地”改为“尚未编写” |
+| 2026-10-08 | 本次 docs 迭代统一文档与代码库状态不一致点：v0.4 收官前，部分文档一度记载 H-04/H-05 仍待编写；但工具代码已实际落地；随后复核确认 `make go-test`（vet + test）与 `make test-orch`（6 场景并行，6 passed / 0 failed）均通过，v0.4 最终标记为整体完成 |
 | 2026-10-08 | 继续 v0.5 后续开发前，统一当前未完成项表述：v0.5 仅剩 IPC(pipe/channel/shared_memory) 未落地；syscall.md 与 filesystem.md 仍为占位文档，尚未进入 v0.6/v0.7 编码 |
 | 2026-10-08 | 按开发流程复查后更新：v0.4 与 v0.5 都尚未在 DEVELOPMENT 里标记为整体“以完成”，因为当前尚未完成项尚未通过验收/尚未实现 |
 | 2026-10-08 | 本次 docs 迭代统一各阶段文档顶部元信息（阶段 / 最后更新 / 状态）、修订记录与本文件描述一致，保持索引与主开发文档一致 |

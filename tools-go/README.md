@@ -52,6 +52,6 @@ go run ./cmd/serialmon -file ../build/orch/exception/serial.log -once -allow-pan
 
 | 日期 | 变更 |
 | ---- | ---- |
-| 2026-10-08 | 创建本文档，记录 H-04（testorch）/H-05（serialmon）仍待编写 |
-| 2026-10-08 | 本次 docs 迭代统一文档顶部元信息（阶段 / 最后更新 / 状态）与修订记录，保持与 DEVELOPMENT.md 与索引文档描述一致 |
+| 2026-10-08 | 创建本文档，记录 H-04（testorch）/H-05（serialmon）安装目录与用法（暂时未编写工具代码；模块结构仅初始化） |
 | 2026-10-08 | H-04/H-05 落地并验收：`make go-test`（vet + test）与 `make test-orch`（6 场景并行，6 passed / 0 failed）均通过，表格与验收项改为已完成 |
+| 2026-10-08 | 本次 docs 迭代统一文档顶部元信息（阶段 / 最后更新 / 状态）与修订记录，保持与 DEVELOPMENT.md 与索引文档描述一致 |
