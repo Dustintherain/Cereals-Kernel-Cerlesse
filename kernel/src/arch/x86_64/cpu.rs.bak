@@ -74,6 +74,7 @@ pub fn set_fmask(mask: u64) {
 pub fn clear_cr4_smap_smep() {
     unsafe {
         let cr4 = crate::arch::x86_64::cpu::read_cr3();
+        // 実際には CR4 を読む必要があるのでここでは素通りしない。
         let _ = cr4;
     }
 }
