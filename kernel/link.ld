@@ -32,6 +32,9 @@ SECTIONS
     . = ALIGN(4096);
     __kernel_end = .;
 
+    . = ALIGN(4096);
+    __user_entry_anchor = .;
+
     /DISCARD/ : {
         *(.eh_frame .eh_frame_hdr)
         *(.comment)

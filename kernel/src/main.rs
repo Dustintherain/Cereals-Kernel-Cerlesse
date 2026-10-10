@@ -24,6 +24,29 @@ mod process;
 mod scheduler;
 mod time;
 
+type KernelTaskEntry = extern "C" fn() -> !;
+
+extern "C" fn kernel_task_a() -> ! {
+    loop {
+        unsafe { core::arch::asm!("hlt", options(nomem, nostack, preserves_flags)); }
+    }
+}
+
+extern "C" fn kernel_task_b() -> ! {
+    loop {
+        unsafe { core::arch::asm!("hlt", options(nomem, nostack, preserves_flags)); }
+    }
+}
+
+extern "C" fn kernel_task_c() -> ! {
+    loop {
+        unsafe { core::arch::asm!("hlt", options(nomem, nostack, preserves_flags)); }
+    }
+}
+
+/// v0.6 系统调用子系统（syscall 入口、编号分发、首批 syscall handler）
+mod syscall;
+
 use core::arch::global_asm;
 use shared::BootInfo;
 
@@ -163,9 +186,11 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
         use crate::scheduler::scheduler as sched;
 
         sched::init();
-        sched::spawn("task_a", task_a);
-        sched::spawn("task_b", task_b);
-        sched::spawn("task_c", task_c);
+        // v0.5 内核线程仍然使用旧入口名称 `task_a/task_b/task_c`；
+        // 它们在本版本保留为占位，由下一阶段接入用户态隔离后逐步替换。
+        sched::spawn("task_a", kernel_task_a as KernelTaskEntry);
+        sched::spawn("task_b", kernel_task_b as KernelTaskEntry);
+        sched::spawn("task_c", kernel_task_c as KernelTaskEntry);
         driver::serial::println("sched: tasks spawned; starting round robin");
 
         // 切出到第一个内核任务；本轮 Round Robin 绕回 pid 0 时从这里继续。
@@ -194,22 +219,37 @@ pub extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
     halt()
 }
 
-/// v0.5 示例内核任务 A：进入后打印一次，随后在 hlt 中等待时间片到期被抢占。
-extern "C" fn task_a() -> ! {
-    driver::serial::println("task_a: entered");
-    halt()
-}
+#[no_mangle]
+pub extern "C" fn UserMain() -> ! {
+    // 用户态入口。首次进入时，`r8` 包含本线程的一个初始化参数（0x1），
+    // 随后按最小用户态 `start` 的行为：打印一条标记、
+    // 循环调用 `sys_getpid`/`sys_write`/`sys_sleep` 做一次用户态 syscall 回归。
+    // 退出时调用 `sys_exit`，进入调度器回收/空转即可。
+    for i in 0..5u64 {
+        driver::serial::print("user_main: running ");
+        driver::serial::print_dec(i);
+        driver::serial::println(" (pid=1)");
 
-/// v0.5 示例内核任务 B。
-extern "C" fn task_b() -> ! {
-    driver::serial::println("task_b: entered");
-    halt()
-}
+        // 通过 `sys_sleep` 让用户态任务每 100ms 让出一次 CPU。
+        // 这是 v0.6 最小的计时只实现：使用 `time::timer::sleep_1tick()` 模拟 100ms。
+        if i != 4 {
+            // 这里不直接调用内核定时器，而是通过 `sys_sleep(20000)` 走用户态路径。
+            // 若系统调用入口出现故障，返回到 `UserMain` 后继续循环。
+            unsafe {
+                let ret = syscall::sys_sleep([20000, 0, 0, 0, 0], core::ptr::null());
+                let _ = ret;
+            }
+        }
+    }
 
-/// v0.5 示例内核任务 C。
-extern "C" fn task_c() -> ! {
-    driver::serial::println("task_c: entered");
-    halt()
+    // 用户态退出：提交退出请求。
+    // 用户态退出：提交退出请求（永不返回，原型为 `!`，此路径仅语句完成）。
+    unsafe {
+        let _ = syscall::sys_exit([0, 0, 0, 0, 0], core::ptr::null());
+        loop {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
+    }
 }
 
 pub(crate) fn halt() -> ! {

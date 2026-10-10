@@ -1,4 +1,4 @@
-//! 上下文切换原语（v0.4 起，为 v0.5 的 Task/调度铺路）
+//! 上下文切换原语（v0.4 起，为 v0.5 的 Task/调度铺路；v0.6 扩展为用户态切换）
 //!
 //! 提供最小可用的**内核态**上下文切换：
 //! - [`switch_to`]：保存当前上下文的 callee-saved 寄存器、RFLAGS 与栈指针，恢复目标上下文；
@@ -8,10 +8,10 @@
 //! 约定与边界：
 //! - 保存 callee-saved（rbp/rbx/r12..r15）、RFLAGS 与 rsp，与 SysV 调用约定一致；
 //!   caller-saved 寄存器由调用者自行处理，XMM/FPU 状态**尚未**保存（v0.5 补）。
-//! - **必须保存 RFLAGS**：v0.5 的调度切换发生在 IRQ0 中断上下文内，
-//!   中断门会清 IF；若不随上下文保存/恢复 RFLAGS，切出后 IF 永久为 0，
-//!   后续 IRQ 不再递交，调度与心跳停摆。
-//! - 地址空间切换（CR3）尚未接入，`ThreadContext::cr3` 目前仅记录意图；
+//! - **必须保存 RFLAGS**：v0.5 的调度切换发生在 IRQ0 中断上下文内，中断门会清 IF；
+//!   若不随上下文保存/恢复 RFLAGS，切出后 IF 永久为 0，后续 IRQ 不再递交，调度与心跳停摆。
+//! - 地址空间切换（CR3）作为可选字段 `cr3` 记录；v0.6 用户态切换会填写用户页表根，
+//!   内核自己保持恒等映射，不切换 CR3。
 //! - `rip` / `rflags` 预留给 v0.5（用于用户态入口与 ring 切换的 iretq 帧）。
 
 #![allow(dead_code)]
@@ -23,7 +23,7 @@ use core::ptr::addr_of_mut;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ThreadContext {
-    /// 该任务的地址空间根（CR3）；v0.5 接入页表切换时使用。
+    /// 该任务的地址空间根（CR3）；v0.6 用户态切换时设为用户页表根。
     pub cr3: u64,
     /// 内核栈指针：指向已保存的 callee-saved 寄存器区（切换后 pop + ret 使用）。
     pub rsp: u64,
@@ -46,15 +46,14 @@ impl ThreadContext {
 
 global_asm!(
     // context_switch(prev: *mut ThreadContext /*rdi*/, next: *mut ThreadContext /*rsi*/)
-    //
+    // 相当于 SysV 的 `context_switch`，但实际用的是 `context_switch_sys` 的汇编体，
+    // 只是为了让当前代码与已有测试/链接脚本约定保持一致。
+    ".globl context_switch", "context_switch:",
     // 1) 把 RFLAGS 与 callee-saved 寄存器压入**当前**栈；
     // 2) prev->rsp = rsp（偏移 8，即 rsp 字段）；
     // 3) rsp = next->rsp（偏移 8）；
     // 4) 从新栈弹出 callee-saved/RFLAGS 并 ret 到 next 保存的返回点。
-    //
     // 栈上保存顺序（低地址 → 高地址）：r15 r14 r13 r12 rbx rbp rflags ret
-    ".global context_switch",
-    "context_switch:",
     "pushfq",
     "push rbp",
     "push rbx",
@@ -62,8 +61,17 @@ global_asm!(
     "push r13",
     "push r14",
     "push r15",
+
+    // 当前栈顶（存放这 7 个 qword）是 rsp 当前值。
+    // 我们先把当前 rsp 暂存到 prev->rsp。
     "mov [rdi + 8], rsp",
+
+    // 把 rsp 换成 next 的栈顶（next->rsp 字段，前 7 个 qword 被压在我们读到的值上）。
+    // 注意：next->rsp 紧跟在 next 结构之后（即 [rsi + 8]），
+    // 随后还跟着 next->rip 和 next->rflags。
     "mov rsp, [rsi + 8]",
+
+    // 弹出 r15..rflags 并 ret。
     "pop r15",
     "pop r14",
     "pop r13",

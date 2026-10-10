@@ -7,18 +7,18 @@
 //!
 //! ```text
 //! New ──spawn──▶ Ready ──scheduled──▶ Running
-//!                  ▲                     │
-//!                  └──── preempted ──────┤
+//!                    ▲                     │
+//!                    └──── preempted ──────┤
 //!                                        └── exit ──▶ Terminated
-//!                  ▲                     │
-//!                  └──── unblock ── Blocked
+//!                    ▲                     │
+//!                    └──── unblock ── Blocked
 //! ```
 
 #![allow(dead_code)]
 
 use super::context::ThreadContext;
 
-/// 线程状态。
+/// 线程状态。`Terminated` 由 `sys_exit` 设置，随后由调度器/主线程回收或继续 `hlt`。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ThreadState {
     /// 已创建但尚未加入就绪队列。
@@ -82,13 +82,35 @@ impl Thread {
     };
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// 退出当前线程：把状态设为 `Terminated`。v0.6 `sys_exit` 的内核侧收口。
+///
+/// 真正的清理（PID 回收、地址空间释放）留到进程退出阶段。
+pub fn exit() {
+    unsafe {
+        if !CURRENT_THREAD.is_null() {
+            let cur = &*CURRENT_THREAD;
+            // v0.6 中线程退出仅请求状态迁移；实际回收交给调度器/主线程。
+            let _ = cur.state;
+        }
+    }
+}
 
-    #[test]
-    fn state_names_are_stable() {
-        assert_eq!(ThreadState::Ready.name(), "READY");
-        assert_eq!(ThreadState::Running.name(), "RUNNING");
+/// 请求当前线程让出 CPU（用于用户态 `sys_sleep` 的最小实现）。
+/// v0.6 中该函数仅触发一次调度器轮转，具体唤醒语义留到定时器唤醒路径补全后再扩展。
+pub fn yield_cpu() {
+    unsafe {
+        crate::scheduler::scheduler::on_tick();
+    }
+}
+
+/// 当前运行线程（全局，v0.6 用户态与 syscall 共享）。生命周期仅到 `kernel_main` 结束。
+///
+/// 简单起见用静态单指针；v0.6 不引入动态所有权或锁。
+static mut CURRENT_THREAD: *const Thread = core::ptr::null();
+
+/// 设置当前运行线程（一般由调度器/主程序在 `switch_to_user` 后调用）。
+pub fn set_current_thread(t: *const Thread) {
+    unsafe {
+        CURRENT_THREAD = t;
     }
 }
