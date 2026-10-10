@@ -1,26 +1,32 @@
-//! GDT 全局描述符表 + TSS（v0.2 实现）
+//! GDT 全局描述符表 + TSS（v0.2 实现；v0.6 追加：用户コード/データ段）
 //!
-//! 布局：0x00 null | 0x08 内核代码 | 0x10 内核数据 | 0x18 TSS（16 字节项，占 3-4）。
+//! 布局：0x00 null | 0x08 内核コード | 0x10 内核データ | 0x18 TSS（16 字节项，占 3-4）
+//!        | 0x28 用户コード | 0x30 用户データ
 //! TSS 提供 IST1 专用双错栈与 RSP0（v0.4/v0.6 用户态陷入时使用）。
 
 use core::arch::asm;
 use core::mem::size_of;
 use core::ptr::{addr_of, addr_of_mut};
 
-/// 内核代码段选择子（index 1）
+/// 内核コード段選択子（index 1）
 pub const KERNEL_CODE: u16 = 0x08;
-/// 内核数据段选择子（index 2）
+/// 内核データ段選択子（index 2）
 pub const KERNEL_DATA: u16 = 0x10;
-/// TSS 选择子（index 3）
+/// TSS 選択子（index 3）
 pub const TSS_SEL: u16 = 0x18;
 
-// 内核栈顶（crate 根 `main.rs` 的 `_start` 汇编中定义，`.global` 导出）
+/// 用户コード段選択子（index 5、RPL=3）
+pub const USER_CODE: u16 = 0x28;
+/// 用户データ段選択子（index 6、RPL=3）
+pub const USER_DATA: u16 = 0x30;
+
+/// 内核栈顶（crate 根 `main.rs` の `_start` 汇编 で定義、`.global` 导出）
 extern "C" {
     #[link_name = "stack_top"]
     static STACK_TOP: u8;
 }
 
-/// 64 位任务状态段
+/// 64 位タスク状態段
 #[repr(C, packed)]
 struct TaskStateSegment {
     reserved0: u32,
@@ -55,6 +61,8 @@ struct Gdt {
     data: u64,
     tss_low: u64,
     tss_high: u64,
+    user_code: u64,
+    user_data: u64,
 }
 
 static mut GDT: Gdt = Gdt {
@@ -63,6 +71,8 @@ static mut GDT: Gdt = Gdt {
     data: 0,
     tss_low: 0,
     tss_high: 0,
+    user_code: 0,
+    user_data: 0,
 };
 
 #[repr(C, packed)]
@@ -71,36 +81,35 @@ struct GdtPointer {
     base: u64,
 }
 
-/// 构造 64 位可用 TSS 描述符（16 字节 = 低 8 + 高 8）
-fn tss_descriptor(base: u64, limit: u32) -> (u64, u64) {
-    let low = (limit as u64 & 0xFFFF)
+/// 64 位タスク状態段を構築するヘルパー（TSS 描述子 本体 16 バイト）
+fn tss_desc_low(base: u64, limit: u32) -> u64 {
+    (limit as u64 & 0xFFFF)
         | ((base & 0xFFFF) << 16)
         | (((base >> 16) & 0xFF) << 32)
-        | (0x89 << 40) // type=0x9（可用 64 位 TSS）, P=1, DPL=0
+        | (0x89 << 40)
         | (((limit as u64 >> 16) & 0xF) << 48)
-        | (((base >> 24) & 0xFF) << 56);
-    let high = (base >> 32) & 0xFFFF_FFFF;
-    (low, high)
+        | (((base >> 24) & 0xFF) << 56)
 }
 
 /// 加载自有 GDT，重载 CS/DS/SS/ES，加载 TSS。
 pub fn init() {
     unsafe {
-        // 1. 填充 TSS：IST1 = 双错栈顶；RSP0 = 内核栈顶
+        // 1. 填充 TSS：IST1 = 双错栈顶；RSP0 = 用户态陷入用固定カーネルスタック
         let tss = &mut *addr_of_mut!(TSS);
         tss.ist[0] = core::ptr::addr_of!(DOUBLE_FAULT_STACK.0) as u64 + DF_STACK_SIZE as u64;
         tss.rsp[0] = addr_of!(STACK_TOP) as u64;
 
         // 2. 填充 GDT（含 TSS 描述符）
-        let (tss_low, tss_high) = tss_descriptor(
-            addr_of!(TSS) as u64,
-            (size_of::<TaskStateSegment>() - 1) as u32,
-        );
+        let tss_low = tss_desc_low(addr_of!(TSS) as u64, (size_of::<TaskStateSegment>() - 1) as u32);
+        let tss_high = (addr_of!(TSS) as u64 >> 32) & 0xFFFF_FFFF;
         let gdt = &mut *addr_of_mut!(GDT);
-        gdt.code = 0x00AF_9A00_0000_FFFF; // 64 位代码段：P, DPL0, 可执行/可读, L=1
-        gdt.data = 0x00CF_9200_0000_FFFF; // 数据段：P, DPL0, 可写, G=1
+        gdt.null = 0;
+        gdt.code = 0x00AF_9A00_0000_FFFF; // 64 位コード段：P, DPL0, 可执行/可读, L=1
+        gdt.data = 0x00CF_9200_0000_FFFF; // データ段：P, DPL0, 可写, G=1
         gdt.tss_low = tss_low;
         gdt.tss_high = tss_high;
+        gdt.user_code = 0x00AF_FA00_0000_FFFF; // 用户コード 64-bit：P, DPL3, L=1
+        gdt.user_data = 0x00CF_F200_0000_FFFF; // 用户データ：P, DPL3, G=1
 
         // 3. lgdt
         let ptr = GdtPointer {
@@ -121,7 +130,7 @@ pub fn init() {
             options(preserves_flags),
         );
 
-        // 5. 重载数据段
+        // 5. 重载データ段
         asm!(
             "mov ds, {0:x}",
             "mov es, {0:x}",
