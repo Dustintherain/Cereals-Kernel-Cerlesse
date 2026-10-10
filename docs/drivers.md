@@ -1,6 +1,6 @@
 # 设备驱动 / PCI / 网络（阶段文档）
 
-- 阶段：第六阶段（v0.4 基础驱动已落地；v0.8–v0.9 完整驱动与网络待编写）
+- 阶段：第八阶段（v0.8 驱动框架 / PCI / 磁盘；v0.4 中断控制时钟键盘已完成）
 - 最后更新：2026-10-08
 - 状态：✅ v0.4 已完成（中断控制器 + PIT Timer + PS/2 键盘 + 上下文切换原语 + H-04/H-05 Go 工具，均已验收，见 `kernel/src/interrupt/`、`kernel/src/time/`、`kernel/src/driver/keyboard.rs`、`kernel/src/arch/x86_64/context.rs`、`tools-go/`；v0.8–v0.9 驱动/PCI/磁盘/网络 尚未编写，待对应阶段）
 
