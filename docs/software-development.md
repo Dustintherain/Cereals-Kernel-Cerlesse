@@ -90,7 +90,7 @@ make test-orch       # Go 编排器并行跑 orchestrate.json 全部场景 + 串
 | ---- | ---- | ---- |
 | 内核内自测 | 内存/页表/上下文/调度/IPC 等在启动时打印 `... PASS` | `kernel/src/**` |
 | 集成测试 | Python 驱动 QEMU，断言串口日志 | `tests/test_*.py` |
-| 主机侧单元测试 | CKC 容器、Go 工具 | `tests/test_ckc.py`、`tools-go` |
+| 主机侧单元测试 | CKC 容器、Go 工具 | `userland/pkgmgr/tests/test_ckc.py`（阶段五迁至用户态 workspace）、`tools-go` |
 | 编排/回归 | Go 编排器并行 + 日志二次复核 | `tools-go/cmd/testorch` |
 
 ## 5. 调试
@@ -158,11 +158,13 @@ qemu ... -no-reboot -d int,cpu_reset   # 崩溃/triple fault 时转储中断与 
 
 ### 10.1 新增一个系统调用
 
-1. 在 `kernel/src/syscall/syscall_table.rs` 的号表与 `UNIMPLEMENTED` 里定号（沿用 Linux x86_64 语义）；
-2. 在对应子模块（`file.rs`/`memory.rs`/`process.rs`…）实现 handler，返回负数 errno；
-3. 把它挂进 `SYS_TABLE`，去掉 `UNIMPLEMENTED` 条目；
-4. 在 `libc/src/syscall.rs` 增加封装与常量；
-5. 加断言（`tests/test_*.py` / `--expect-re`），并同步 [api.md](./api.md) 与 [syscall.md](./syscall.md)。
+1. **先往 `abi/src/syscall.rs` 加号**（这是 ABI 的唯一定义点，阶段三起）：写号与名字，需要时加减进 `UNIMPLEMENTED`、
+   并扩 `SYS_MAX`（沿用 Linux x86_64 语义；`0..=255` 只按 Linux 语义新增，`>= 256` 是 Cerlesse 扩展段）；
+2. 在对应子模块（`file.rs`/`memory.rs`/`process.rs`…）实现 handler，返回负数 errno（用 `abi::errno::*`，不写字面量）；
+3. 把它挂进 `kernel/src/syscall/syscall_table.rs` 的 `SYS_TABLE`，并从 `abi` 的 `UNIMPLEMENTED` 里去掉那条；
+4. 在 `libc/src/syscall.rs` 增加封装（号/常量从 `abi` 取，**不要写第二份数字**）；
+5. 加断言（`tests/test_*.py` / `--expect-re`），并同步 [api.md](./api.md) 与 [syscall.md](./syscall.md)；
+6. `make abi-check`（号唯一 / 号段不重叠 / 记录尺寸）+ `make check-boundary` 必须通过 —— 它们就是 ABI 的防漂移门禁。
 
 ### 10.2 新增一个用户程序
 

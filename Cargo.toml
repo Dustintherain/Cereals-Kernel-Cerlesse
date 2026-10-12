@@ -10,7 +10,9 @@ resolver = "2"
 #   - 删掉整个 `userland/` 目录后 `cargo build -p kernel` 仍然成功（进入串口诊断模式）；
 #   - 本文件不再定义 `user-release` profile（它随用户程序搬到 userland/Cargo.toml）；
 #   - 边界由 `python3 tools/check-boundary.py`（`make check-boundary`）强制。
-members = ["shared", "boot", "kernel"]
+#   - `abi`（阶段三）是**系统调用 ABI 的单一事实源**：调用号 / errno / 标志位 /
+#     记录布局只有一处定义，内核与 libc 都引用它（消灭 C6 的“两处镜像”）。
+members = ["shared", "boot", "abi", "kernel"]
 exclude = ["userland"]
 
 [profile.dev]

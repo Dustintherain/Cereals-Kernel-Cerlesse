@@ -46,77 +46,77 @@
 //! 因此原样可用（详见 `docs/process.md`）。
 
 /// 系统调用号（与内核表一致；不要用魔法数调用 `raw`）。
-pub const SYS_READ: u64 = 0;
-pub const SYS_WRITE: u64 = 1;
-pub const SYS_OPEN: u64 = 2;
-pub const SYS_CLOSE: u64 = 3;
-pub const SYS_MMAP: u64 = 9;
-pub const SYS_MPROTECT: u64 = 10;
-pub const SYS_MUNMAP: u64 = 11;
-pub const SYS_BRK: u64 = 12;
-pub const SYS_SLEEP: u64 = 35; // nanosleep
-pub const SYS_GETPID: u64 = 39;
-pub const SYS_FORK: u64 = 57;
-pub const SYS_EXEC: u64 = 59;
-pub const SYS_EXIT: u64 = 60;
-pub const SYS_WAIT: u64 = 61;
+pub const SYS_READ: u64 = abi::syscall::SYS_READ;
+pub const SYS_WRITE: u64 = abi::syscall::SYS_WRITE;
+pub const SYS_OPEN: u64 = abi::syscall::SYS_OPEN;
+pub const SYS_CLOSE: u64 = abi::syscall::SYS_CLOSE;
+pub const SYS_MMAP: u64 = abi::syscall::SYS_MMAP;
+pub const SYS_MPROTECT: u64 = abi::syscall::SYS_MPROTECT;
+pub const SYS_MUNMAP: u64 = abi::syscall::SYS_MUNMAP;
+pub const SYS_BRK: u64 = abi::syscall::SYS_BRK;
+pub const SYS_SLEEP: u64 = abi::syscall::SYS_SLEEP; // nanosleep
+pub const SYS_GETPID: u64 = abi::syscall::SYS_GETPID;
+pub const SYS_FORK: u64 = abi::syscall::SYS_FORK;
+pub const SYS_EXEC: u64 = abi::syscall::SYS_EXEC;
+pub const SYS_EXIT: u64 = abi::syscall::SYS_EXIT;
+pub const SYS_WAIT: u64 = abi::syscall::SYS_WAIT;
 
 /// 标准输入（v0.7 未接通：`read` 返回 0 = EOF）。
-pub const STDIN: i32 = 0;
+pub const STDIN: i32 = abi::flags::STDIN;
 /// 标准输出（内核把它接到串口）。
-pub const STDOUT: i32 = 1;
+pub const STDOUT: i32 = abi::flags::STDOUT;
 /// 标准错误（同样接到串口）。
-pub const STDERR: i32 = 2;
+pub const STDERR: i32 = abi::flags::STDERR;
 /// 第一个动态 fd（内核 `fs::file::FD_FIRST_DYNAMIC`）。
-pub const FD_FIRST_DYNAMIC: i32 = 3;
+pub const FD_FIRST_DYNAMIC: i32 = abi::flags::FD_FIRST_DYNAMIC;
 
 /// `open` 标志：只读。
-pub const O_RDONLY: i32 = 0;
+pub const O_RDONLY: i32 = abi::flags::O_RDONLY;
 /// `open` 标志：只写。
-pub const O_WRONLY: i32 = 1;
+pub const O_WRONLY: i32 = abi::flags::O_WRONLY;
 /// `open` 标志：读写。
-pub const O_RDWR: i32 = 2;
+pub const O_RDWR: i32 = abi::flags::O_RDWR;
 /// `open` 标志：不存在则创建（父目录必须已存在）。
-pub const O_CREAT: i32 = 0o100;
+pub const O_CREAT: i32 = abi::flags::O_CREAT;
 
 /// `-ENOENT`：路径不存在。
-pub const ENOENT: isize = -2;
+pub const ENOENT: isize = abi::errno::ENOENT as isize;
 /// `-EBADF`：fd 无效 / 未打开 / 打开模式与操作不符。
-pub const EBADF: isize = -9;
+pub const EBADF: isize = abi::errno::EBADF as isize;
 /// `-EAGAIN`：本次没有数据可用（非阻塞语义，不是错误）。
 ///
 /// v0.9 只有 `read(0)` 会返回它：1.5 秒内键盘没有交付一整行时
 /// （内核在无输入时不会无限等待，理由见 `kernel/src/syscall/file.rs::read_stdin`）。
-pub const EAGAIN: isize = -11;
+pub const EAGAIN: isize = abi::errno::EAGAIN as isize;
 /// `-ENOMEM`：内核内存不足。
-pub const ENOMEM: isize = -12;
+pub const ENOMEM: isize = abi::errno::ENOMEM as isize;
 /// `-EFAULT`：用户传了不属于自己的地址区间。
-pub const EFAULT: isize = -14;
+pub const EFAULT: isize = abi::errno::EFAULT as isize;
 /// `-EISDIR`：目标是目录，但调用方要当文件用。
-pub const EISDIR: isize = -21;
+pub const EISDIR: isize = abi::errno::EISDIR as isize;
 /// `-EINVAL`：参数非法（含 `flags` 里的未知位、非法路径）。
-pub const EINVAL: isize = -22;
+pub const EINVAL: isize = abi::errno::EINVAL as isize;
 /// `-ENOSPC`：空间不足（fd 用尽 / 文件超过 RAMFS 上限）。
-pub const ENOSPC: isize = -28;
+pub const ENOSPC: isize = abi::errno::ENOSPC as isize;
 /// `-ENOSYS`：号合法但内核尚未实现（v1.0 第一步实现 `mprotect` 后没有这样的号了，
 /// 保留常量是因为内核仍有 `ENOSYS` 桩与「号越界」两种不可实现的失败）。
-pub const ENOSYS: isize = -38;
+pub const ENOSYS: isize = abi::errno::ENOSYS as isize;
 /// `-ECHILD`：`wait4` 找不到该 PID 的直接子进程。
-pub const ECHILD: isize = -10;
+pub const ECHILD: isize = abi::errno::ECHILD as isize;
 
 /// `mmap` / `mprotect` 保护位：不可访问（页帧仍在，可用 [`mprotect`] 再启用）。
-pub const PROT_NONE: i32 = 0x0;
+pub const PROT_NONE: i32 = abi::flags::PROT_NONE as i32;
 /// `mmap` / `mprotect` 保护位：可读。
-pub const PROT_READ: i32 = 0x1;
+pub const PROT_READ: i32 = abi::flags::PROT_READ as i32;
 /// `mmap` 保护位：可写。
-pub const PROT_WRITE: i32 = 0x2;
+pub const PROT_WRITE: i32 = abi::flags::PROT_WRITE as i32;
 /// `mmap` 保护位：可执行（**不能**与 [`PROT_WRITE`] 同时使用：内核强制 W^X）。
-pub const PROT_EXEC: i32 = 0x4;
+pub const PROT_EXEC: i32 = abi::flags::PROT_EXEC as i32;
 
 /// `mmap` 标志：私有映射（与 [`MAP_ANONYMOUS`] 一起是最小可用组合）。
-pub const MAP_PRIVATE: i32 = 0x2;
+pub const MAP_PRIVATE: i32 = abi::flags::MAP_PRIVATE as i32;
 /// `mmap` 标志：匿名映射（本内核**只**支持它，且要求 `fd = -1`）。
-pub const MAP_ANONYMOUS: i32 = 0x20;
+pub const MAP_ANONYMOUS: i32 = abi::flags::MAP_ANONYMOUS as i32;
 
 /// 原始系统调用：`rax` = 号，`rdi/rsi/rdx/r10/r8` = 参数，返回 `rax`。
 ///
@@ -260,7 +260,7 @@ pub fn nanosleep(ticks: u64) -> isize {
 }
 
 /// `execve` 的 `argv` 项数上限（与内核 `syscall::process::ARG_MAX` 一致）。
-pub const ARG_MAX: usize = 8;
+pub const ARG_MAX: usize = abi::limits::ARG_MAX as usize;
 
 /// `fork()`：复制当前进程。
 ///
@@ -314,13 +314,13 @@ pub fn wait4(pid: i64) -> isize {
 // ---------------------------------------------------------------- 目录列举（getdents）
 
 /// `getdents` 的系统调用号（Linux 同名号；**记录格式与 Linux 不同**，见下）。
-pub const SYS_GETDENTS: u64 = 78;
+pub const SYS_GETDENTS: u64 = abi::syscall::SYS_GETDENTS;
 /// 单条目录记录的字节数（必须与内核 `syscall::dir::DIRENT_SIZE` 一致）。
-pub const DIRENT_SIZE: usize = 88;
+pub const DIRENT_SIZE: usize = abi::dirent::DIRENT_SIZE;
 /// 目录记录里名字字段的容量。
-pub const DIRENT_NAME_MAX: usize = 64;
+pub const DIRENT_NAME_MAX: usize = abi::dirent::NAME_MAX;
 /// 目录记录里名字字段的偏移。
-pub const DIRENT_NAME_OFFSET: usize = 24;
+pub const DIRENT_NAME_OFFSET: usize = abi::dirent::NAME_OFFSET;
 
 /// `getdents(path, buf)`：把 `path` 的目录项写进 `buf`，返回**记录数**（负数 = errno）。
 ///
@@ -383,13 +383,13 @@ pub fn dirent_size(buf: &[u8], index: usize) -> u64 {
 // ---------------------------------------------------------------- 进程表（getprocs）
 
 /// `getprocs` 的系统调用号（**Cerlesse 扩展号段**，Linux x86_64 不使用 256）。
-pub const SYS_GETPROCS: u64 = 256;
+pub const SYS_GETPROCS: u64 = abi::syscall::SYS_GETPROCS;
 /// 单条进程记录的字节数（必须与内核 `syscall::process::PROCINFO_SIZE` 一致）。
-pub const PROCINFO_SIZE: usize = 40;
+pub const PROCINFO_SIZE: usize = abi::procinfo::PROCINFO_SIZE;
 /// 进程记录里 `comm` 字段的容量。
-pub const PROCINFO_NAME_MAX: usize = 16;
+pub const PROCINFO_NAME_MAX: usize = abi::procinfo::NAME_MAX;
 /// 进程记录里 `comm` 字段的偏移。
-pub const PROCINFO_NAME_OFFSET: usize = 24;
+pub const PROCINFO_NAME_OFFSET: usize = abi::procinfo::NAME_OFFSET;
 
 /// `getprocs(buf)`：把进程表快照写进 `buf`，返回**记录数**（负数 = errno）。
 ///
@@ -453,29 +453,29 @@ pub fn procinfo_name(buf: &[u8], index: usize) -> &str {
 // ---------------------------------------------------------------- 存储卷表（CSS-1）
 
 /// `storage_volumes` 的系统调用号（CSS-1；号段见 `docs/storage.md` 6.3）。
-pub const SYS_STORAGE_VOLUMES: u64 = 261;
+pub const SYS_STORAGE_VOLUMES: u64 = abi::syscall::SYS_STORAGE_VOLUMES;
 /// `storage_rescan` 的系统调用号（CSS-1）。
-pub const SYS_STORAGE_RESCAN: u64 = 265;
+pub const SYS_STORAGE_RESCAN: u64 = abi::syscall::SYS_STORAGE_RESCAN;
 /// `storage_mount` 的系统调用号（**CSS-3**）：把卷挂到路径。
-pub const SYS_STORAGE_MOUNT: u64 = 262;
+pub const SYS_STORAGE_MOUNT: u64 = abi::syscall::SYS_STORAGE_MOUNT;
 /// `storage_unmount` 的系统调用号（CSS-3）：卸掉一个挂载点。
-pub const SYS_STORAGE_UNMOUNT: u64 = 263;
+pub const SYS_STORAGE_UNMOUNT: u64 = abi::syscall::SYS_STORAGE_UNMOUNT;
 /// `storage_assign_letter` 的系统调用号（CSS-3）：分配/取消盘符。
-pub const SYS_STORAGE_ASSIGN_LETTER: u64 = 264;
+pub const SYS_STORAGE_ASSIGN_LETTER: u64 = abi::syscall::SYS_STORAGE_ASSIGN_LETTER;
 /// `storage_mount` 的 `flags` bit0：只读挂载（→ 只读原因 `ro-mount`）。
-pub const STORAGE_MOUNT_RDONLY: u64 = 1;
+pub const STORAGE_MOUNT_RDONLY: u64 = abi::volume::MOUNT_RDONLY;
 /// `storage_assign_letter` 的「取消」取值（回到缺省规则，而不是「没有盘符」）。
-pub const STORAGE_LETTER_NONE: u8 = 0;
+pub const STORAGE_LETTER_NONE: u8 = abi::volume::LETTER_NONE;
 /// 单条卷记录的字节数（必须与内核 `storage::volume::VOLUME_RECORD_SIZE` 一致）。
-pub const VOLUME_RECORD_SIZE: usize = 64;
+pub const VOLUME_RECORD_SIZE: usize = abi::volume::RECORD_SIZE;
 /// `vol_id` 字段里可读字符的上限（记录占 16 字节：15 字符 + NUL）。
-pub const VOLUME_ID_MAX: usize = 15;
+pub const VOLUME_ID_MAX: usize = abi::volume::ID_MAX;
 /// 卷标字段容量（11 字节，FAT 风格）。
-pub const VOLUME_LABEL_MAX: usize = 11;
+pub const VOLUME_LABEL_MAX: usize = abi::volume::LABEL_MAX;
 /// `free_bytes` 的 unknown 哨兵（内核用 `u64::MAX`：0 会让「盘满」与「没实现」分不开）。
-pub const VOLUME_FREE_UNKNOWN: u64 = u64::MAX;
+pub const VOLUME_FREE_UNKNOWN: u64 = abi::volume::FREE_UNKNOWN;
 /// `storage_rescan` 的「全部设备」下标。
-pub const STORAGE_RESCAN_ALL: u32 = u32::MAX;
+pub const STORAGE_RESCAN_ALL: u32 = abi::volume::RESCAN_ALL;
 
 /// `storage_volumes(buf, out_count)`：导出卷表快照，返回**实际写入的记录数**。
 ///
@@ -700,68 +700,68 @@ pub fn volume_mounts(buf: &[u8], index: usize) -> u32 {
 // ---------------------------------------------------------------- CKM（CKM-1）
 
 /// `ckm_policy_query` 的系统调用号（CKM-1，`docs/ckm.md` 4.3）。
-pub const SYS_CKM_POLICY_QUERY: u64 = 257;
+pub const SYS_CKM_POLICY_QUERY: u64 = abi::syscall::SYS_CKM_POLICY_QUERY;
 /// `ckm_audit_read` 的系统调用号（CKM-1）。
-pub const SYS_CKM_AUDIT_READ: u64 = 258;
+pub const SYS_CKM_AUDIT_READ: u64 = abi::syscall::SYS_CKM_AUDIT_READ;
 /// `ckm_component_state` 的系统调用号（CKM-1）。
-pub const SYS_CKM_COMPONENT_STATE: u64 = 259;
+pub const SYS_CKM_COMPONENT_STATE: u64 = abi::syscall::SYS_CKM_COMPONENT_STATE;
 
 /// CKM ABI 版本（必须与内核 `ckm::CKM_ABI_VERSION` 相等）。
-pub const CKM_ABI_VERSION: u32 = 1;
+pub const CKM_ABI_VERSION: u32 = abi::ckm::ABI_VERSION;
 
 /// 审计记录长度（必须与内核 `ckm::audit::AUDIT_RECORD_SIZE` 一致）。
-pub const AUDIT_RECORD_SIZE: usize = 48;
+pub const AUDIT_RECORD_SIZE: usize = abi::ckm::AUDIT_RECORD_SIZE;
 /// 组件状态记录长度（必须与内核 `ckm::state::COMPONENT_RECORD_SIZE` 一致）。
-pub const COMPONENT_RECORD_SIZE: usize = 64;
+pub const COMPONENT_RECORD_SIZE: usize = abi::ckm::COMPONENT_RECORD_SIZE;
 /// 组件 `id` 字段里可读字符的上限（记录占 16 字节：15 字符 + NUL）。
-pub const COMPONENT_ID_MAX: usize = 15;
+pub const COMPONENT_ID_MAX: usize = abi::ckm::COMPONENT_ID_MAX;
 /// 组件状态表容量（内核 `ckm::STATE_SLOTS`）。
-pub const MAX_COMPONENTS: usize = 32;
+pub const MAX_COMPONENTS: usize = abi::ckm::MAX_COMPONENTS;
 
 /// `-EPERM`：**能力不足**（受保护前缀），与下面的 `EACCES` 刻意区分。
-pub const EPERM: isize = -1;
+pub const EPERM: isize = abi::errno::EPERM as isize;
 /// `-EACCES`：**mode 不允许**（POSIX；文件不属于你）。
-pub const EACCES: isize = -13;
+pub const EACCES: isize = abi::errno::EACCES as isize;
 
 /// `CAP_CKM_ADMIN`：改 CKM 策略（uid 1000）。
-pub const CAP_CKM_ADMIN: u32 = 0x1;
+pub const CAP_CKM_ADMIN: u32 = abi::ckm::CAP_CKM_ADMIN;
 /// `CAP_CKM_SERVICE`：执行扩展事务（`ckmd`，uid 1001）。
-pub const CAP_CKM_SERVICE: u32 = 0x2;
+pub const CAP_CKM_SERVICE: u32 = abi::ckm::CAP_CKM_SERVICE;
 /// `CAP_FS_SYSTEM_WRITE`：写受保护前缀（`/etc`、`/bin`、`/lib`、`/init`）。
-pub const CAP_FS_SYSTEM_WRITE: u32 = 0x4;
+pub const CAP_FS_SYSTEM_WRITE: u32 = abi::ckm::CAP_FS_SYSTEM_WRITE;
 /// `CAP_AUDIT_READ`：读审计环形缓冲。
-pub const CAP_AUDIT_READ: u32 = 0x8;
+pub const CAP_AUDIT_READ: u32 = abi::ckm::CAP_AUDIT_READ;
 /// `CAP_STORAGE_ADMIN`：存储管理的可逆动作（挂载/卸载/盘符/重扫）。
-pub const CAP_STORAGE_ADMIN: u32 = 0x10;
+pub const CAP_STORAGE_ADMIN: u32 = abi::ckm::CAP_STORAGE_ADMIN;
 /// `CAP_STORAGE_FORMAT`：创建/格式化文件系统（破坏性）。
-pub const CAP_STORAGE_FORMAT: u32 = 0x20;
+pub const CAP_STORAGE_FORMAT: u32 = abi::ckm::CAP_STORAGE_FORMAT;
 
 // op / 事件编号（`docs/ckm.md` 4.6；与内核 `ckm::policy::Op` 一致）
-pub const CKM_OP_FS_WRITE: u16 = 1;
-pub const CKM_OP_STATE_WRITE: u16 = 2;
-pub const CKM_OP_POLICY_SET: u16 = 3;
-pub const CKM_OP_AUDIT_READ: u16 = 4;
-pub const CKM_OP_POLICY_QUERY: u16 = 5;
-pub const CKM_OP_EXEC_COMPONENT: u16 = 6;
-pub const CKM_OP_OVERLAY_REGISTER: u16 = 7;
-pub const CKM_OP_OVERLAY_CONFLICT: u16 = 8;
-pub const CKM_OP_SAFE_MODE_ENTER: u16 = 9;
-pub const CKM_OP_TXN_COMMIT: u16 = 10;
-pub const CKM_OP_TXN_ROLLBACK: u16 = 11;
-pub const CKM_OP_STORAGE_MOUNT: u16 = 12;
-pub const CKM_OP_STORAGE_UNMOUNT: u16 = 13;
-pub const CKM_OP_STORAGE_LETTER: u16 = 14;
-pub const CKM_OP_STORAGE_FORMAT: u16 = 15;
-pub const CKM_OP_STORAGE_RESCAN: u16 = 16;
+pub const CKM_OP_FS_WRITE: u16 = abi::ckm::OP_FS_WRITE;
+pub const CKM_OP_STATE_WRITE: u16 = abi::ckm::OP_STATE_WRITE;
+pub const CKM_OP_POLICY_SET: u16 = abi::ckm::OP_POLICY_SET;
+pub const CKM_OP_AUDIT_READ: u16 = abi::ckm::OP_AUDIT_READ;
+pub const CKM_OP_POLICY_QUERY: u16 = abi::ckm::OP_POLICY_QUERY;
+pub const CKM_OP_EXEC_COMPONENT: u16 = abi::ckm::OP_EXEC_COMPONENT;
+pub const CKM_OP_OVERLAY_REGISTER: u16 = abi::ckm::OP_OVERLAY_REGISTER;
+pub const CKM_OP_OVERLAY_CONFLICT: u16 = abi::ckm::OP_OVERLAY_CONFLICT;
+pub const CKM_OP_SAFE_MODE_ENTER: u16 = abi::ckm::OP_SAFE_MODE_ENTER;
+pub const CKM_OP_TXN_COMMIT: u16 = abi::ckm::OP_TXN_COMMIT;
+pub const CKM_OP_TXN_ROLLBACK: u16 = abi::ckm::OP_TXN_ROLLBACK;
+pub const CKM_OP_STORAGE_MOUNT: u16 = abi::ckm::OP_STORAGE_MOUNT;
+pub const CKM_OP_STORAGE_UNMOUNT: u16 = abi::ckm::OP_STORAGE_UNMOUNT;
+pub const CKM_OP_STORAGE_LETTER: u16 = abi::ckm::OP_STORAGE_LETTER;
+pub const CKM_OP_STORAGE_FORMAT: u16 = abi::ckm::OP_STORAGE_FORMAT;
+pub const CKM_OP_STORAGE_RESCAN: u16 = abi::ckm::OP_STORAGE_RESCAN;
 
 /// 受保护前缀下标（`fs_write` 的 `arg` 语义：它就是内核 `detail` 里的那个下标）。
-pub const CKM_PREFIX_ETC: u64 = 0;
+pub const CKM_PREFIX_ETC: u64 = abi::ckm::PREFIX_ETC;
 /// `/bin`
-pub const CKM_PREFIX_BIN: u64 = 1;
+pub const CKM_PREFIX_BIN: u64 = abi::ckm::PREFIX_BIN;
 /// `/lib`
-pub const CKM_PREFIX_LIB: u64 = 2;
+pub const CKM_PREFIX_LIB: u64 = abi::ckm::PREFIX_LIB;
 /// `/init`
-pub const CKM_PREFIX_INIT: u64 = 3;
+pub const CKM_PREFIX_INIT: u64 = abi::ckm::PREFIX_INIT;
 
 /// op 短名（与内核串口证据同一批字串；日志与 CLI 显示用）。
 pub fn ckm_op_name(op: u16) -> &'static str {

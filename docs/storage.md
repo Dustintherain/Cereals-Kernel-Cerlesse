@@ -396,7 +396,10 @@ kernel/src/
   `ENOSYS` 桩（CSS-4 才定义）；262/263/264 的失败语义固定在 `syscall/storage.rs` 的表头里
   （`ENOENT` 卷不存在/`ENOTSUP` 没后端/`EEXIST` 挂载点或字母重复/`EINVAL` 卸根或非法字母）。
 
-### 6.4 卷记录（64 字节）与分区记录（48 字节）—— 内核侧唯一权威定义
+### 6.4 卷记录（64 字节）与分区记录（48 字节）
+
+**权威定义（阶段三起）**：卷记录的尺寸/字段宽度在 `abi::volume`（`abi/src/volume.rs`），
+内核 `storage/volume.rs` 是**写记录的一方**、`libc` 是**解析的一方**，两侧引用同一处。
 
 **卷记录（64 字节）** —— `storage_volumes` 的单元：
 
@@ -431,8 +434,8 @@ kernel/src/
 | 36 | 4 | `flags` | bit0 = 启动/EFI 分区，bit1 = 只读建议（GPT 属性位），其余保留 0 |
 | 40 | 8 | `reserved` | 0 |
 
-两份布局与 6.3 的号段**必须**在 [docs/api.md](./api.md) 与 `userland/libc` 里镜像一次
-（与 `DIRENT_SIZE`/`PROCINFO_SIZE` 同样的做法：内核是唯一权威定义，用户态用
+两份布局与 6.3 的号段在 [docs/api.md](./api.md) 与 `userland/libc` 里有文字说明与解析器；
+**数字不镜像**（阶段三起与 `DIRENT_SIZE`/`PROCINFO_SIZE` 同一做法：`abi` 是唯一权威定义，用户态用
 `volume_*`（已落地）/`partition_*`（CSS-3）解析器，不自己算偏移）。
 
 ### 6.5 枚举顺序（必须确定性）
@@ -582,7 +585,7 @@ storage: selftest PASS (checks=N)
 | 8 | 卸载 | 卸载后路径消失、卷仍在表 | 卸载后 `open` 返回 `ENOENT`，`storage_volumes` 仍列出该卷（`mount_count=0`） |
 | 9 | 不支持的文件系统 | 可见但不挂载 | 未识别格式 → 卷记录 `fs_kind=0 health=unsupported` + 访问返回 `ENOTSUP`（**不是** `ENOENT`） |
 | 10 | 权限 | 未授权挂载/分配字母被拒 | ✅ `make test-ckm`：uid 2000 的 `/bin/hello` 三次存储受控动作均 `-1` + `need=0x10`；对偶的是 Shell(uid 1000) `volumes demo` 三次成功（`make test-programs`） |
-| 11 | 记录布局 | 内核与 libc 偏移一致 | libc 解析器对固定 64/48 字节样本断言字段值（与 `DIRENT_SIZE`/`PROCINFO_SIZE` 同样的做法） |
+| 11 | 记录布局 | 内核与 libc 偏移一致 | ✅ 阶段三后**结构上不可能不一致**：尺寸与字段宽度定义在 `abi::volume`（`make abi-check` 固化 + `abi/src/record.rs` 编译期断言）；libc 解析器另有固定 64/48 字节样本的字段断言 |
 
 补充（必须同批验收，避免「功能对、机制没生效」）：
 

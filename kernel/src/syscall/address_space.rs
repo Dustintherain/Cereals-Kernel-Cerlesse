@@ -134,16 +134,12 @@ pub const USER_DYN_PAGES: usize = 32;
 /// 共享库窗口字节上限。
 pub const USER_DYN_MAX: u64 = USER_DYN_PAGES as u64 * PAGE_SIZE;
 
-/// `PROT_*`：用户内存保护位（与 Linux 一致）。
+/// `PROT_*`：用户内存保护位（与 Linux 一致）—— **再导出**，位值定义在 `abi::flags`
+/// （阶段三的单一事实源：内核与 libc 引用同一处，不再“各写一份 + 注释提醒”）。
 ///
-/// 位值在这里定义**一次**（syscall 层翻译与校验都用它，libc 侧镜像同一组常量）。
 /// 本模块只负责把位翻译成页表标志（[`prot_to_flags`]），ABI 层的合法性校验
 /// （未知位、`W^X`）在 `syscall/memory.rs`。
-pub const PROT_READ: u64 = 0x1;
-pub const PROT_WRITE: u64 = 0x2;
-pub const PROT_EXEC: u64 = 0x4;
-/// 所有合法的 `PROT_*` 位；其余位（例如 Linux 的 `PROT_GROWSDOWN`）一律 `EINVAL`。
-pub const PROT_MASK: u64 = PROT_READ | PROT_WRITE | PROT_EXEC;
+pub use abi::flags::{PROT_EXEC, PROT_MASK, PROT_READ, PROT_WRITE};
 
 /// 本地址空间在 `new()` 期间拥有的帧数量：PML4 + PDPT + PD + PT + 栈页。
 ///

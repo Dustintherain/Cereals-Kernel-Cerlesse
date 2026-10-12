@@ -4,7 +4,7 @@
 - 最后更新：2026-10-12
 - 状态：🟡 **提案 v1 + P0a/P0b 已落地** —— 设计规格（格式/安全模型/事务语义/CLI/验收）已定；
   **包容器 `.ckc`（P0a）与事务引擎（P0b = CKM-3）都已实现**：
-  `tools/pkgmgr/ckc.py`（`pack`/`verify`/`info`）+ `tools/pkgmgr/cpm.py`
+  `userland/pkgmgr/ckc.py`（`pack`/`verify`/`info`）+ `userland/pkgmgr/cpm.py`
   （`init`/`add`/`remove`/`rollback`/`status`/`ls`/`verify`/`plan`/`apply`/`recover`/`gc`）；
   `make test-pkg` = `test-ckc`（37 项）+ `test-cpm`（**63 项**），两份都含独立复核；
   catalog 签名/`trust`（开放问题 13.1 未定夺）与内核侧接入（P1）仍待做，见第 11 节（P0b 落地清单见 11.1）
@@ -149,7 +149,7 @@ mode   = 0o644
 
 ### 3.2 `.ckc` —— 包容器（CKC = Cerlesse Kernel Container）
 
-**后缀 `.ckc` 是 Cerlesse 内核包的唯一合法后缀**（`cpm pack` / `tools/pkgmgr/ckc.py pack` 的输出）。
+**后缀 `.ckc` 是 Cerlesse 内核包的唯一合法后缀**（`cpm pack` / `userland/pkgmgr/ckc.py pack` 的输出）。
 后缀 + 文件头魔数让一个包**一眼可辨、不会被当成普通 tar 随便解开**，同时把校验所需信息放在最前面：
 读 64 字节头就能判断版本、是否被截断、以及 payload 的 SHA-256，不必先解析整个 tar。
 
@@ -189,12 +189,12 @@ payload 是**确定性未压缩 ustar**。规则必须全部满足，否则同�
 （Cerlesse Kernel Container）—— 与项目名同源、和现有 `.img`/`.elf` 产物不混，
 而且「CKC」本身就说明它是内核包容器。`.cpk` 不再被识别（`ckc.py verify` 直接拒绝）。
 
-**已落地的部分（P0a，2026-10-11）**：`tools/pkgmgr/ckc.py`（纯标准库）实现
-`pack` / `verify` / `info`，退出码与 9.2 一致；`make test-pkg`（`tests/test_ckc.py`）**37 项断言**通过，
+**已落地的部分（P0a，2026-10-11）**：`userland/pkgmgr/ckc.py`（纯标准库）实现
+`pack` / `verify` / `info`，退出码与 9.2 一致；`make test-pkg`（`userland/pkgmgr/tests/test_ckc.py`）**37 项断言**通过，
 包括确定性、头部逐字段、payload 篡改、ustar 结构规则、打包期规则（超长路径/越界 target/setuid/重复 target/hooks），
 以及**独立复核**：用系统 `tar` 读同一段 payload，条目与内容必须与 `ckc.py` 一致（不是自己验自己）。
 **仍未做（P0b 的剩余面）**：catalog 签名与 `trust` 公钥管理（开放问题 13.1 未定夺，见 11.1）；
-事务/回执/store/`recover` 已随 P0b 落地（`tools/pkgmgr/cpm.py`）。
+事务/回执/store/`recover` 已随 P0b 落地（`userland/pkgmgr/cpm.py`）。
 
 ### 3.3 `catalog.toml` + `catalog.toml.sig` —— 渠道清单
 
@@ -503,7 +503,7 @@ user           : ~ /home/<user>
 | `cpm verify [<name>]` | 用 receipt 逐文件校验（含依赖检查） | `--json` |
 | `cpm recover` | 回放未提交事务并回滚 | `--json` |
 | `cpm gc` | 回收无引用 blob 与旧事务日志 | `--dry-run` |
-| `cpm pack <dir>` | `PKG.toml` → `.ckc`（确定性；**已实现**为 `tools/pkgmgr/ckc.py pack`） | `--out`、`--print-rev` |
+| `cpm pack <dir>` | `PKG.toml` → `.ckc`（确定性；**已实现**为 `userland/pkgmgr/ckc.py pack`） | `--out`、`--print-rev` |
 | `cpm catalog sign <file>` | 用私钥签 catalog（构建/维护侧） | `--key` |
 
 ### 9.2 退出码（必须稳定，脚本依赖它）
@@ -559,16 +559,16 @@ user           : ~ /home/<user>
 
 **P0a（已落地）—— 包容器与打包/校验规则**
 
-- `tools/pkgmgr/ckc.py`：`.ckc` 容器（3.2）的 `pack` / `verify` / `info`；
+- `userland/pkgmgr/ckc.py`：`.ckc` 容器（3.2）的 `pack` / `verify` / `info`；
 - 确定性打包（两次打包逐字节相同）+ `--print-rev`；
 - 打包期规则：`PKG.toml` 子集解析、target 规范化与 scope 白名单、setuid/setgid/sticky 拒绝、
   `hooks = true` 拒绝、超长路径 `ENAMETOOLONG`、重复 target 拒绝；
 - 校验：头部逐字段 + payload SHA-256 + ustar 结构（排序 / 首条目 / mtime / 补零 / 仅常规文件）；
-- 验收：`make test-pkg`（`tests/test_ckc.py`，**37 项**，含用系统 `tar` 的独立复核）。
+- 验收：`make test-pkg`（`userland/pkgmgr/tests/test_ckc.py`，**37 项**，含用系统 `tar` 的独立复核）。
 
 **P0b（已落地 2026-10-12）—— 事务、状态与目录**
 
-`tools/pkgmgr/cpm.py`（纯标准库）实现 7、8 节的事务与 6.4 的回收；权威落点：
+`userland/pkgmgr/cpm.py`（纯标准库）实现 7、8 节的事务与 6.4 的回收；权威落点：
 
 | 交付物 | 落点 |
 | ---- | ---- |
@@ -598,7 +598,7 @@ user           : ~ /home/<user>
 证明拒绝发生在写任何文件之前。
 
 > **与 CKM 的关系（2026-10-11）**：P0b 的交付物（事务、回执、catalog/签名、`recover`）就是
-> [CKM](ckm.md) 的 **CKM-3 阶段**，实现位置从 `tools/pkgmgr/` 延伸到 CKM Service（`userland/ckmd`）；
+> [CKM](ckm.md) 的 **CKM-3 阶段**，实现位置从 `userland/pkgmgr/` 延伸到 CKM Service（`userland/ckmd`）；
 > P1 原先说的「内核侧只保留未来的消费点」现在有具体契约：CKM 的组件状态接口（`ckm_component_state`，
 > 号 259）与 `/ckm/**` 状态树。**包格式（P0a）与本节的事务语义不变**，本文仍是包格式与事务的唯一规格。
 
@@ -648,7 +648,7 @@ user           : ~ /home/<user>
 
 - 本提案不改变任何现有验收：`make test-all`（内核侧 12 个串口断言目标）、`make go-test`、
   `make test-orch`（11 场景）都必须保持现状；
-- P0 的 `make test-pkg` 是**主机侧**测试（`tests/test_ckc.py`，不启 QEMU），不进 `tests/orchestrate.json`（那里是 QEMU 场景）；
+- P0 的 `make test-pkg` 是**主机侧**测试（`userland/pkgmgr/tests/test_ckc.py`，不启 QEMU），不进 `tests/orchestrate.json`（那里是 QEMU 场景）；
 - 不改 `tools/image-builder` / `tools/mkfs` 的现有行为（P1 才动，且以回归通过为前提）。
 
 ---
@@ -681,7 +681,8 @@ user           : ~ /home/<user>
 
 | 日期 | 变更 |
 | ---- | ---- |
+| 2026-10-12 | **阶段五：主机侧工具迁出内核仓库** —— `tools/pkgmgr/{ckc.py,cpm.py}` → `userland/pkgmgr/`，`tests/test_{ckc,cpm}.py` → `userland/pkgmgr/tests/`；宿主工具属于**用户态 workspace**（与 `libc/`、`user/` 同级），内核仓库不再持有包管理器实现；`make test-pkg` 由根 Makefile 转发到 `userland/`（见 `docs/pure-kernel.md` 8.2）；本文所有路径引用同步 |
 | 2026-10-07 | 新增本文档：提出一种高效、安全、轻量且具备类似 Windows 包管理器灵活性的包管理器设计方案，含意图驱动模型、安装区与事务回退、按需元数据、安全域边界等要点 |
-| 2026-10-12 | **P0b 落地（= CKM-3 事务引擎）**：新增 `tools/pkgmgr/cpm.py`（纯标准库）—— 目录骨架（`scopes`/`store/sha256`/`receipts`/`txn`/`cache`/`catalog`/`trust`）、回执（当前 + `.prev.toml`）、事务日志（`txn/<utc>-<pid>.jsonl`，append-only + `fsync`）、7.1 的 stage/verify/activate/commit + 逆序回滚、内容寻址 store 与文件级去重、`recover`（未提交事务回滚 + 陈旧锁接管）、`gc`、单写者锁、9.2 退出码与 `--json`；**安装期用 `ckc.manifest_from_data` 重跑域边界/路径白名单**（`tools/pkgmgr/ckc.py` 为此把 `load_manifest` 的校验体拆成可复用的 `manifest_from_data`，`make test-pkg` 的 37 项不变）；失败注入开关 `--fail-after <阶段>`（自动回滚、退出码 3）与 `--crash-after <阶段>`（硬退出 9、留未提交事务给 `recover`）；新增验收 `tests/test_cpm.py`（`make test-cpm`，**63 项**，含系统 `tar` 独立复核、逐字节回滚比对、越界包零写入）与 Makefile 目标 `test-pkg = test-ckc + test-cpm`、`test-cpm`；11.1 的 P0b 由「待做」改为落地清单，12.1 标记已落地条目；**仍未做**：catalog 签名/`trust`（开放问题 13.1）与 P1 内核侧接入 |
-| 2026-10-11 | **P0a 落地：`.ckc` 包容器（后缀定名 CKC）** —— 3.2 从「`.cpk` 裸 tar 设想」改写为容器规格：64 字节头（magic `CKC\x01` / 版本 / 头长 / flags / payload_len / payload_off / 32 字节 payload_sha256 / 保留位，小端）+ 确定性 ustar payload（归档名 = 目标路径去 `/`、`PKG.toml` 第一、其余按字节序、mtime/uid/gid 全 0、仅常规文件、补零为 0、不压缩）；身份 = **payload** 哈希；新增实现 `tools/pkgmgr/ckc.py`（纯标准库：`pack`/`verify`/`info` + 退出码 0/1/2/4 + `PKG.toml` 子集解析与 scope 白名单/setuid/超长路径等打包期规则）与验收 `tests/test_ckc.py`（`make test-pkg`，**37 项**：确定性、头部逐字段、payload 篡改、ustar 结构规则、打包期规则、系统 `tar` 独立复核）；11.1 拆成 P0a（已落地）/P0b（事务、catalog、receipt）；同步 docs/README.md 索引、DEVELOPMENT.md 的 H-06 行、README.md、tools/README.md、project-structure.md |
+| 2026-10-12 | **P0b 落地（= CKM-3 事务引擎）**：新增 `userland/pkgmgr/cpm.py`（纯标准库）—— 目录骨架（`scopes`/`store/sha256`/`receipts`/`txn`/`cache`/`catalog`/`trust`）、回执（当前 + `.prev.toml`）、事务日志（`txn/<utc>-<pid>.jsonl`，append-only + `fsync`）、7.1 的 stage/verify/activate/commit + 逆序回滚、内容寻址 store 与文件级去重、`recover`（未提交事务回滚 + 陈旧锁接管）、`gc`、单写者锁、9.2 退出码与 `--json`；**安装期用 `ckc.manifest_from_data` 重跑域边界/路径白名单**（`userland/pkgmgr/ckc.py` 为此把 `load_manifest` 的校验体拆成可复用的 `manifest_from_data`，`make test-pkg` 的 37 项不变）；失败注入开关 `--fail-after <阶段>`（自动回滚、退出码 3）与 `--crash-after <阶段>`（硬退出 9、留未提交事务给 `recover`）；新增验收 `userland/pkgmgr/tests/test_cpm.py`（`make test-cpm`，**63 项**，含系统 `tar` 独立复核、逐字节回滚比对、越界包零写入）与 Makefile 目标 `test-pkg = test-ckc + test-cpm`、`test-cpm`；11.1 的 P0b 由「待做」改为落地清单，12.1 标记已落地条目；**仍未做**：catalog 签名/`trust`（开放问题 13.1）与 P1 内核侧接入 |
+| 2026-10-11 | **P0a 落地：`.ckc` 包容器（后缀定名 CKC）** —— 3.2 从「`.cpk` 裸 tar 设想」改写为容器规格：64 字节头（magic `CKC\x01` / 版本 / 头长 / flags / payload_len / payload_off / 32 字节 payload_sha256 / 保留位，小端）+ 确定性 ustar payload（归档名 = 目标路径去 `/`、`PKG.toml` 第一、其余按字节序、mtime/uid/gid 全 0、仅常规文件、补零为 0、不压缩）；身份 = **payload** 哈希；新增实现 `userland/pkgmgr/ckc.py`（纯标准库：`pack`/`verify`/`info` + 退出码 0/1/2/4 + `PKG.toml` 子集解析与 scope 白名单/setuid/超长路径等打包期规则）与验收 `userland/pkgmgr/tests/test_ckc.py`（`make test-pkg`，**37 项**：确定性、头部逐字段、payload 篡改、ustar 结构规则、打包期规则、系统 `tar` 独立复核）；11.1 拆成 P0a（已落地）/P0b（事务、catalog、receipt）；同步 docs/README.md 索引、DEVELOPMENT.md 的 H-06 行、README.md、tools/README.md、project-structure.md |
 | 2026-10-11 | **提案 v1（本版）**：把设想补成可实施的规格 —— 术语字段级定义（2）、七个制品格式（`PKG.toml`/`.cpk`/`catalog(+sig)`/`cpkg.toml`/receipt/journal/store，3）、内容标识与三级校验（4）、安全模型（信任根/域边界/**纯文件安装**/威胁对策表，5）、效率预算（6.3）、事务阶段与原子性边界（7）、scope 白名单与到内核现状的映射（8）、CLI 与退出码（9）、MVP 三期（11）、可脚本断言的验收条目（12.1）；同步更新索引状态（docs/README.md）与 DEVELOPMENT.md 的 H-06 行 |

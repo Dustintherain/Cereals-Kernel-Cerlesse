@@ -1,7 +1,7 @@
 # 系统调用 / 用户空间 / ELF（阶段文档）
 
 - 阶段：第六阶段（v0.6 – v0.7）+ 第九阶段（v0.9 运行时前置条件与动态链接）
-- 最后更新：2026-10-11
+- 最后更新：2026-10-12
 - 状态：🟡 v0.7 已落地：**ELF Loader**（从 RAMFS 上的 `/init` 装载，按段权限逐页映射）+ 文件 syscall
   （`read`/`write`/`open`/`close`，对接 VFS/RAMFS）+ 用户 `RW` 段对 ring3 可写；
   **v0.9 已落地六步**：用户堆（3.5）、`stdin` + 交互式 Shell（3.6）、
@@ -13,6 +13,10 @@
   `make test-user` 91 项 / `make test-shell` 11 项 / `make test-proc` 8 项 + 4 条正则 /
   `make test-programs` 17 项 + 5 条正则 / `make test-dyn` 10 项 / `make test-fs` 21 项 PASS；
   仍未做：环境变量（`envp`）、**完整**动态链接（用户态 `ld.so`，见 3.9）、文件映射（`mmap` 加 offset）
+- **阶段三（2026-10-12）**：调用号 / `errno` / 标志位 / 记录布局的**权威定义已移入 `abi/` crate**
+  （单一事实源）：本文档的号段表与各记录布局由它校对，内核与 `libc` 都引用同一处；
+  防漂移命令是 `make abi-check`（序号/号段/记录尺寸/能力位固化）+ `abi/src/record.rs`
+  （编译期断言：改坏即构建失败）。本文档仍是**文字规格**，代码里的数字以 `abi/` 为准
 
 > 本文档顶部保留阶段 / 最后更新 / 状态字段，与项目文档维护约定对齐。
 - 依赖：process.md（进程模型）、memory.md（用户地址空间）
@@ -497,7 +501,7 @@ v0.9 第三步把入口改成按进程切换（当前进程下标 + 每进程内
 
 - [x] `user: fork parent=3 -> child pid=N image_pages=7`：子进程拿到**父进程映像的副本**（7 页 = Shell 的映像）；
 - [x] `user: run child pid=N name=fork-child`：子进程在父进程 `wait4` 时被恢复（单 CPU 的延迟调度）；
-- [x] `user: exec pid=N path=/bin/hello segments=4 image_pages=5 entry=0x8000000000`：映像被**换掉**且 PID 不变；
+- [x] `user: exec pid=N path=/bin/hello segments=4 image_pages=6 entry=0x8000000000`：映像被**换掉**且 PID 不变（页数随 libc/程序体积变动，2026-10-12 实测 6 页）；
 - [x] `hello-bin: argc=2` + `argv[0]=hello` + `argv[1]=world`：内核写的 `argv` 用户栈被用户程序读出来（`libc::args`）；
 - [x] `user: exec /bin/ls -> ENOENT` + `sh: ls: exit code=127`：**路径不存在**也是完整链路（fork 成功 → execve 失败 → 子进程 `exit(127)` → 父进程拿到 127）；
 - [x] `sh: hello: exit code=1` + `user: reaped pid=N exit=1`：退出码沿 `wait4` 回到父进程；
@@ -517,7 +521,7 @@ v0.9 第三步把入口改成按进程切换（当前进程下标 + 每进程内
 没有 inode 号/硬链接，不编造 `linux_dirent64` 里的 `ino`/`off`/`d_type`）；而 Linux x86_64
 **没有**「列举进程」的调用（它的 `ps` 读 `/proc`），所以 `getprocs` 放在 **256** ——
 `syscall_table.rs` 明确把 `0..=255` 留给 Linux 语义、`>= 256` 作为 Cerlesse 扩展号段
-（`SYS_MAX` 随之 256 → 257）。解析偏移只有一处权威定义（内核侧模块文档），
+（`SYS_MAX` 随之 256 → 257）。解析偏移只有一处权威定义（阶段三起：`abi::dirent` / `abi::procinfo`），
 `libc` 提供 `dirent_name`/`dirent_is_dir`/`dirent_size` 与 `procinfo_pid`/`ppid`/`state`/`name`
 让用户程序不必自己算偏移。
 
@@ -546,7 +550,7 @@ Linux `task_struct.comm` 的形状）—— `create` 用调试名填充，`execv
       （`sh`/`hello`/`ls`/`cat`/`echo`/`ps`/`dynhello`/`volumes`，后两个见 3.9 与 3.11）—— 同时证明 `fs::init` 的程序清单是完整的；
 - [x] `user: getprocs count=2` + `ps: pid=3 ppid=0 state=RUNNING comm=sh` + `ps: pid=N ppid=3 … comm=ps`：
       `ps` 读的是**内核进程表**：表里恰好是 Shell 与 `ps` 自己，`ppid` 指回 Shell（`fork` 建出的父子关系）；
-- [x] `user: exec pid=N path=/bin/{ls,ps,echo,cat} segments=4 image_pages=5 entry=0x8000000000`：
+- [x] `user: exec pid=N path=/bin/{ls,ps,echo} segments=4 image_pages=5 entry=0x8000000000`（`/bin/cat` 为 **6 页**）：
       四个程序都是**真的**被 `execve` 起来的（不是内建命令代劳）；
 - [x] `cat: /etc/motd bytes=23` + `motd: hello from ramfs`：`/bin/cat` 走完整文件 syscall；
 - [x] `echo program works`：`argv` 经内核写入新进程用户栈后被程序原样打印；
@@ -654,7 +658,7 @@ v0.9 收官时「号已定义但未实现」的调用只剩 `mprotect`（`syscal
 
 CSS-1（见 [storage.md](./storage.md)）在内核里立起「设备 → 分区 → 卷」的只读识别层，
 用户态通过两个新号读它 —— 与 `getprocs`/`getdents` 同一套做法：**定长记录 + 一次调用写满**，
-记录布局的权威定义在内核侧模块（`storage/volume.rs`），`libc` 只提供解析器。
+记录布局的权威定义在 `abi::volume`（阶段三起；`storage/volume.rs` 是写记录的一方），`libc` 只提供解析器。
 
 | syscall | 号 | 实现位置 | 用户态使用者 | 说明 |
 | ---- | ---- | ---- | ---- | ---- |
@@ -763,4 +767,5 @@ fd ≥ 3 一律经 VFS 抽象路由，syscall 层不认识具体后端。
 | 2026-10-11 | **v0.9 第六步：内核侧最小动态链接** —— 新增 3.9；`syscall/elf.rs::load` 按 `e_type` 分流（`ET_DYN` → 新增 `syscall/dynamic.rs`，`ET_EXEC` 路径不变）；`address_space.rs` 新增共享库窗口（`USER_DYN_BASE` = 基址 + 1 MiB、32 页）与 `map_dyn_page`/`dyn_page_count`/`phys_of`（内核 CR3 下写重定位），`fork` 复制窗口、`page_flags` 认可该窗口、`Drop` 整树释放；`dynamic.rs` 解析 `PT_INTERP`/`PT_DYNAMIC`/`DT_NEEDED`（`/lib/<name>` 递归装载，上限 8 个对象）并应用 `R_X86_64_RELATIVE`/`GLOB_DAT`/`JUMP_SLOT`/`R_X86_64_64`（按名字线性扫描 `.dynsym`；`DT_PLTREL=REL` 明确拒绝）；新增夹具 `user/dynhello/`（`as`+`ld` 现编，`kernel/build.rs` 内嵌）与 RAMFS `/lib`（`fs::init` 新增 `libraries` 参数，程序清单 7 → 8）；新增 `make test-dyn`（10 项）与 `make dyn-hostcheck`（宿主 glibc 独立复核），`make test-fs` 20 → 21 项、`test-programs` 的 `/` 与 `/bin` 条目数同步 5/7；3.8 的条目数断言与 3.1 的地址布局/`ET_EXEC` 说明同步更新 |
 | 2026-10-11 | **v1.0 第一步：`mprotect`（运行时改保护属性）** —— 新增 3.10；`syscall/memory.rs` 新增 `sys_mprotect`（页对齐/`len>0`/未知位/`W^X` 四类 ABI 拒绝，每类留一行 `user: mprotect rejected (<reason>)`）+ `mmap(PROT_NONE)` 由拒绝改为合法；`address_space.rs` 新增 `mprotect`（范围须在同一窗口、每页已映射，否则 `-EINVAL`；`PROT_NONE` = 清 `USER` 留 `PRESENT`）、`UserWindow`、`prot_to_flags`、`accessible`（`PRESENT`+`USER` 齐备才算可访问）与 `set_page_flags`（改权限即 `invlpg`），堆窗口新增逐页 `heap_flags`（`brk` 增长/收缩与 `fork` 同步，`page_flags` 据此判断堆页）；`syscall_table` 注册 10 号、`UNIMPLEMENTED` 因此**空表**（`mod.rs` 的打印注释同步）；`libc` 新增 `mprotect`/`PROT_NONE`（`lib.rs` re-export）；`user/hello` 新增 `mprotect_selftest`（`PROT_NONE` → 内核拒收 `-EFAULT` → 内容原样 → `RX` 后真的执行机器码 → 6 个负例 → `munmap` 照常归还）；`make test-user` 61 → **91 项** PASS（含 brk 堆窗口的 `PROT_NONE` 往返）；头部状态与 2.7 表、1、3.4/3.5 的「未做」清单同步 |
 | 2026-10-11 | **CSS-1：存储枚举（261 `storage_volumes` / 265 `storage_rescan`）** —— 新增 3.11；`syscall/storage.rs` 实现两个号（定长 64 字节卷记录、确定性枚举、`storage_volumes` 无需能力位、`rescan` 设备不存在 `-ENODEV`）；`syscall_table.rs` 的 `SYS_MAX` 257 → **267**，并在 CKM 预留的 257–260 之后开出 CSS 号段 261–266（261/265 已实现，262/263/264/266 落 `UNIMPLEMENTED` 桩，串口可区分「未实现」与「号越界」）；`libc` 新增 `storage_volumes`/`storage_rescan` + `volume_*` 解析器，新增用户程序 `user/volumes` → `/bin/volumes`；头部号段表、1 节分发表说明、3.4 与 3.10 的「空表」表述同步 |
+| 2026-10-12 | **阶段三：系统调用 ABI 的单一事实源（`abi/` crate）** —— 新增 `abi/`（`no_std`、零依赖、`forbid(unsafe_code)`）：`syscall.rs`（号 + `SYS_MAX` + 号段规则 + `NAMED`/`UNIMPLEMENTED`）、`errno.rs`、`flags.rs`（`O_*`/`PROT_*`/`MAP_*`/fd 编号）、`limits.rs`（`PATH_MAX`/`IO_MAX`/`ARG_*`）、`dirent.rs`/`procinfo.rs`/`volume.rs`/`ckm.rs`（记录布局、能力位、op 编号、受保护前缀）与 `record.rs`（编译期断言）；内核 18 个文件（`syscall/*` 9 + `fs/file.rs` + `security/capability.rs` + `ckm/{mod,audit,state,policy}.rs` + `storage/volume.rs` 等）与 `libc/src/syscall.rs` 的 45 个常量改为引用它（**对外名字与类型不变**，行为零变化）；新增 `make abi-check` 并入 `make check`。相关段落（3.8 的解析偏移、3.11 的记录布局）已改为指向 `abi` |
 | 2026-10-12 | **CSS-3：卷管理（262 `storage_mount` / 263 `storage_unmount` / 264 `storage_assign_letter`）** —— 新增 3.12；`syscall/storage.rs` 实现三个号（参数校验先于能力判定；对应 `fs::mount_volume_by_id`/`fs::unmount_point` 与 `storage::registry::assign_letter`）；`libc` 新增三个包装与 `path` 模块（`C:\x` → POSIX）、`/bin/volumes` 扩为 `list`/`mount`/`unmount`/`letter`/`demo`；头部号段表改为「只余 266 `storage_format` 落 ENOSYS 桩」，3.10 的桩表描述同步；验收在 `make test-storage`（盘符断言）/`test-programs`（`volumes demo` 双入口）/`test-ckm`（零能力拒绝） |

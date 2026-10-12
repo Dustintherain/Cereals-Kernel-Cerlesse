@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 shared = { path = "../shared" }
+# 系统调用 ABI 的单一事实源（阶段三）：调用号 / errno / 标志位 / 记录布局。
+# `no_std`、零依赖、`forbid(unsafe_code)`，因此不影响内核的构建环境假设。
+abi = { path = "../abi" }
 
 [features]
 # v0.2 异常注入测试：构建后在启动末尾故意触发 #DE（make test-exception）

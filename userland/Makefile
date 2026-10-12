@@ -35,7 +35,7 @@ MANIFEST := $(IMAGES)/manifest.txt
 
 SOURCES := $(shell find libc user -name '*.rs' -o -name 'Cargo.toml' -o -name 'user.ld' -o -name '*.s')
 
-.PHONY: help images check dyn dyn-hostcheck clean
+.PHONY: help images check dyn dyn-hostcheck test-pkg test-ckc test-cpm test-all clean
 
 help:
 	@echo "targets:"
@@ -43,6 +43,10 @@ help:
 	@echo "  check         - 校验每个 ELF 的段布局（基址/页对齐/W^X/映像窗口/无重定位）"
 	@echo "  dyn           - 用 binutils（as/ld）现编动态链接夹具：dynhello + libgreet.so + ld.so"
 	@echo "  dyn-hostcheck - 用宿主机 glibc 的 ld.so 跑同一批夹具（binutils + glibc；缺则跳过）"
+	@echo "  test-pkg      - 包管理器验收（主机侧、不启 QEMU）：.ckc 容器（test-ckc）+ cpm 事务引擎（test-cpm）"
+	@echo "  test-ckc      - .ckc 容器格式与打包规则（阶段五从内核仓库迁来）"
+	@echo "  test-cpm      - cpm 事务/回执/回滚/恢复（P0b = CKM-3）"
+	@echo "  test-all      - images + check + dyn-hostcheck + test-pkg（不需要内核源码的那部分）"
 	@echo "  clean         - 删除 $(BUILD)"
 
 images: $(MANIFEST)
@@ -52,7 +56,7 @@ $(MANIFEST): $(SOURCES) Makefile Cargo.toml
 	$(CARGO) build $(CARGO_PROGRAMS) --target $(TRIPLE) --profile $(PROFILE) \
 		--offline --target-dir $(TARGET)
 	@for p in $(PROGRAMS); do \
-		$(PYTHON) $(ROOT)/tools/check_user_elf.py $(OUT)/$$p || exit 1; \
+		$(PYTHON) $(CURDIR)/tools/check_user_elf.py $(OUT)/$$p || exit 1; \
 	done
 	@cp $(OUT)/user-hello     $(IMAGES)/user_hello.elf
 	@cp $(OUT)/user-shell     $(IMAGES)/user_shell.elf
@@ -111,6 +115,23 @@ dyn-hostcheck: dyn
 	grep -q "main: dynamic link ok" $(BUILD)/dynhost-out.txt && \
 	grep -q "greet: hello from libgreet.so" $(BUILD)/dynhost-out.txt && \
 	test $$status -eq 42 && echo "dyn-hostcheck PASS (glibc ld.so, exit=42)" || { echo "dyn-hostcheck FAIL (status=$$status)"; exit 1; }
+
+# 包管理器（纯内核化阶段五从内核仓库 `tools/pkgmgr/` 迁来）：`ckc.py`（.ckc 容器）与
+# `cpm.py`（事务引擎）连同两份套件住在 `pkgmgr/`。主机侧、纯标准库、不启 QEMU，
+# 因此**不需要内核源码** —— 这是本 workspace 可独立测试的那一半。
+#
+# 需要内核镜像的那一半（`test-user`/`test-shell`/`test-proc`/`test-programs`/`test-dyn`）
+# 仍由内核仓库的 Makefile 驱动：它们跑 QEMU，而 QEMU 驱动与镜像组装属于内核仓库。
+test-pkg: test-ckc test-cpm
+
+test-ckc:
+	$(PYTHON) pkgmgr/tests/test_ckc.py
+
+test-cpm:
+	$(PYTHON) pkgmgr/tests/test_cpm.py
+
+# 本 workspace 的「不需要对方源码」的测试集合。
+test-all: images check dyn-hostcheck test-pkg
 
 clean:
 	rm -rf $(BUILD)

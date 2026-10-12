@@ -11,7 +11,7 @@
     开放问题 1 因此取 (b)）+ **覆盖层注册表与路径改写钩子**（`ckm/overlay.rs`，钩子在
     `fs::mount::resolve`）—— 验收是「写 → 重启 → 读回逐字节一致」与「注册/撤销改变 `open` 结果」；
   - **CKM-3**：**事务引擎**（第 7 节的事务阶段与回执）在**主机侧**落地 ——
-    `tools/pkgmgr/cpm.py`（H-06 P0b）：回执、事务日志、stage/verify/activate/commit + 逆序回滚、
+    `userland/pkgmgr/cpm.py`（H-06 P0b）：回执、事务日志、stage/verify/activate/commit + 逆序回滚、
     `recover`（未提交事务）、`gc`、单写者锁、失败注入，验收 `make test-cpm`（63 项）；
     对应「安装可追踪、失败可回滚、重启可恢复」（第 10 节场景 3 的主机侧形态）；
   - **仍未实现**：CKM-4 `ckmd`/`ckm` CLI（把 cpm 的事务搬进内核侧的用户态服务）、
@@ -86,7 +86,7 @@ Cerlesse Kernel                  进程、内存、syscall、VFS、驱动、调�
 | 分区 / 卷 / 盘符 | **完全没有**：块设备按**整盘绝对 LBA** 寻址、挂载点写死在 `fs::mount_disks()`（`dev0→/disk`、`dev1→/mnt/fat`，且只挂 FAT）、Shell 提示符里的 `C:` 是常量字符串 | `driver/block.rs`、`fs/mod.rs`、`docs/storage.md` 第 2 节 | ✅ 归 **CSS**（存储管理）；CKM 只提供它的权限判定与状态持久化，不重复实现卷表 |
 | 扩展包格式 | `.ckc` 容器 + 确定性打包 + payload 哈希 + 打包期规则**已落地**（P0a，`make test-pkg` 37 项） | `docs/package-manager.md` 3.2 / 11.1 | ✅ 直接复用，**不重做**（见 2.2） |
 | `.ckc` 的事务/回执/目录 | **未做**（P0b：`cpm.py`、catalog 签名、事务日志、`rollback`/`recover`） | `docs/package-manager.md` 11.1 | ✅ = CKM 阶段 3 的交付物 |
-| syscall 扩展号段 | `0..=255` = Linux 语义，`>= 256` = Cerlesse 扩展；已用 `getprocs = 256` 与 CSS-1 的 `storage_volumes = 261`/`storage_rescan = 265`，**当前 `SYS_MAX = 267`**（CSS-1 后） | `docs/syscall.md` 3.8/3.11、`syscall_table.rs` | ✅ CKM 从 257 起编号（4.3） |
+| syscall 扩展号段 | `0..=255` = Linux 语义，`>= 256` = Cerlesse 扩展；已用 `getprocs = 256` 与 CSS-1 的 `storage_volumes = 261`/`storage_rescan = 265`，**当前 `SYS_MAX = 267`**（CSS-1 后） | `abi/src/syscall.rs`（**单一事实源**，阶段三）、`docs/syscall.md` 3.8/3.11 | ✅ CKM 从 257 起编号（4.3） |
 | 内核/用户态边界 | 已有 `tools/check-boundary.py`（内核不得嵌套 cargo/内嵌用户态字节/依赖用户态包）与独立 workspace `userland/` | `docs/pure-kernel.md` 第 8 节、`make check-boundary` | ✅ CKM Core 留在内核，`ckmd`/`ckm` 必须进 `userland/` |
 | 审计 / 事件 | ✅ **已落地（CKM-1）**：`ckm/audit.rs` 固定容量环形缓冲（64 条，回绕后仍可读）+ 每次判定的串口证据；用户态经 `ckm_audit_read`(258) 读 48 字节记录 | `ckm: audit seq=… result=deny …`、`ckm: audit ring wrapped capacity=64`、`hello: ckm audit_read -> -1`（无 `CAP_AUDIT_READ`） | ✅ 阶段 1 |
 | 引导菜单 / 恢复镜像 | boot crate 只做「装载内核并移交」；无菜单、无恢复条目、无启动失败计数 | `docs/boot.md`、`boot/` | ✅ 阶段 6（依赖阶段 2 的持久化） |
@@ -496,7 +496,7 @@ KernelSU 把「挂载/覆盖」做成可插拔的**元模块**（官方文档：
 | ---- | ---- | ---- | ---- |
 | **CKM-1 内核接口** ✅ **已落地（2026-10-12）** | `kernel/src/ckm/`（`cred`/`policy`/`state`/`audit`/`api`）+ 3.4 判定点 1/3/5/6 + `ckm_policy_query`/`ckm_audit_read`/`ckm_component_state` + 串口证据 | **v1.0 的 `security/`（uid/gid + mode）已先落地** | `make test-ckm`（22 断言）：缺能力写受保护前缀被拒（`-EPERM`）+ 审计可读（含回绕）+ 组件状态枚举确定性；uid 2000 的 `EPERM`/`EACCES` 对照由 `make test-proc` 断言 |
 | **CKM-2 可写持久化** ✅ **已落地（2026-10-12）** | 系统盘尾部 1 MiB 的**双槽 A/B + CRC32 状态区**（`kernel/src/ckm/store.rs`，开放问题 1 取 (b)）+ VFS 覆盖层的**机制**（`kernel/src/ckm/overlay.rs`：注册/撤销/最长前缀/优先级/同优先级冲突拒绝，钩子在 `fs::mount::resolve`） | CKM-1 | `make test-ckm`（覆盖机制：注册/撤销改变 `open` 结果 + 冲突拒绝）+ `make test-ckm-store`（**跨重启**：写 → 重启 → 读回逐字节一致，且第二次启动只读不写）—— 落地清单见 **9.2** |
-| **CKM-3 事务引擎** ✅ **已落地（2026-10-12，主机侧）** | H-06 P0b（`tools/pkgmgr/cpm.py`）+ 回执 + 事务日志 + `recover` + 失败注入（**签名/catalog 除外**，阻塞于开放问题 4） | CKM-2（状态区；内核侧迁移属 CKM-4） | `make test-pkg`（= `test-ckc` 37 + `test-cpm` **63**）覆盖 H-06 12.1 的剩余条目（离线回滚、原子失败、可恢复、幂等、去重、并发、预算）—— 落地清单见 **9.3** |
+| **CKM-3 事务引擎** ✅ **已落地（2026-10-12，主机侧）** | H-06 P0b（`userland/pkgmgr/cpm.py`）+ 回执 + 事务日志 + `recover` + 失败注入（**签名/catalog 除外**，阻塞于开放问题 4） | CKM-2（状态区；内核侧迁移属 CKM-4） | `make test-pkg`（= `test-ckc` 37 + `test-cpm` **63**）覆盖 H-06 12.1 的剩余条目（离线回滚、原子失败、可恢复、幂等、去重、并发、预算）—— 落地清单见 **9.3** |
 | **CKM-4 特权服务与 CLI** | `userland/ckmd`（持 `CAP_CKM_SERVICE`）+ `userland/ckm`（CLI）+ 内核状态树 `/ckm/**` 写路径 | CKM-3 | QEMU 场景 `ckm`：装/启/停/卸/回滚全链路 + 拒绝证据（判定点 1/3/4/5） |
 | **CKM-5 系统修改模块** | `kind=3` 覆盖层全量（优先级、冲突、开机顺序、基线保护） | CKM-4 | QEMU 场景 `ckm-overlay`：停用后 `open` 回基线（6.4 的三条） |
 | **CKM-6 恢复环境** | 恢复镜像 + 引导菜单/命令行 + 启动失败计数 + 安全模式四件事 | CKM-5 | `make test-recovery`：连续 3 次失败进安全模式；从恢复环境重装 `ckmd` |
@@ -592,7 +592,7 @@ KernelSU 把「挂载/覆盖」做成可插拔的**元模块**（官方文档：
 ### 9.3 CKM-3 落地清单（2026-10-12，主机侧）
 
 CKM-3 的交付物是 **H-06 P0b 的事务引擎**（第 7 节的事务阶段、回执与 `recover`）。
-它落在**主机侧**（`tools/pkgmgr/cpm.py`，纯标准库），与 CSS/CKM 的内核侧改动无关 ——
+它落在**主机侧**（`userland/pkgmgr/cpm.py`，纯标准库），与 CSS/CKM 的内核侧改动无关 ——
 这是刻意的：事务引擎的语义（阶段、回执、回滚、恢复）先在一个可以逐字节比对、可以不启 QEMU
 就能跑几十种故障场景的地方定稿，再由 CKM-4 把它作为 `ckmd` 的库搬进用户态服务。
 
@@ -600,9 +600,9 @@ CKM-3 的交付物是 **H-06 P0b 的事务引擎**（第 7 节的事务阶段、
 
 | 位置 | 内容 |
 | ---- | ---- |
-| `tools/pkgmgr/cpm.py` | 事务引擎与 CLI：`init`/`add`/`remove`/`rollback`/`status`/`ls`/`verify`/`plan`/`apply`/`recover`/`gc` |
-| `tools/pkgmgr/ckc.py` | 新增 `manifest_from_data`（把 `load_manifest` 的校验体拆出来）—— **安装期重跑域边界/路径白名单** 复用打包期规则，不留两套判定 |
-| `tests/test_cpm.py` | 主机侧验收（63 项，不启 QEMU）；`Makefile` 的 `test-pkg = test-ckc + test-cpm` |
+| `userland/pkgmgr/cpm.py` | 事务引擎与 CLI：`init`/`add`/`remove`/`rollback`/`status`/`ls`/`verify`/`plan`/`apply`/`recover`/`gc` |
+| `userland/pkgmgr/ckc.py` | 新增 `manifest_from_data`（把 `load_manifest` 的校验体拆出来）—— **安装期重跑域边界/路径白名单** 复用打包期规则，不留两套判定 |
+| `userland/pkgmgr/tests/test_cpm.py` | 主机侧验收（63 项，不启 QEMU）；`Makefile` 的 `test-pkg = test-ckc + test-cpm` |
 | `receipts/<scope>/<name>.toml`（+ `.prev.toml`） | 回执（3.5）：当前修订 + 上一修订；`rollback` 的落点在本地 store（离线成立） |
 | `txn/<utc>-<pid>.jsonl` | 事务日志（3.6）：append-only、`seq` 单调、逐条 `fsync`；前像在 `txn/<id>/<n>` |
 | `store/sha256/<hex>` | 内容寻址 blob：同内容只存一份（文件级去重） |
@@ -718,8 +718,10 @@ CKM-3 的交付物是 **H-06 P0b 的事务引擎**（第 7 节的事务阶段、
 
 | 日期 | 变更 |
 | ---- | ---- |
-| 2026-10-12 | **CKM-3 落地（事务引擎，主机侧 = H-06 P0b）**：新增 `tools/pkgmgr/cpm.py`（回执 + 事务日志 + stage/verify/activate/commit + 逆序回滚 + `recover` + `gc` + 单写者锁 + 失败注入；**备份与 `activate` 记录都在写目标之前落日志**，因此「写到一半掉电」可恢复）；`tools/pkgmgr/ckc.py` 拆出 `manifest_from_data`，使**安装期重跑域边界/路径白名单**（`make test-pkg` 的 37 项不变）；新增 `tests/test_cpm.py`（`make test-cpm`，**63 项**，含系统 `tar` 独立复核、逐字节回滚比对、手工拼的越界包零写入）；`make test-pkg` 改为 `test-ckc + test-cpm`；新增 **9.3 落地清单**，第 9 节 CKM-3 行改 ✅，第 10 节补 CKM-3 覆盖情况（第 3 条通过；第 2 条仅哈希/ABI 面，签名面阻塞于开放问题 4）；同步 [package-manager.md](./package-manager.md) 11.1/12.1/14 |
+| 2026-10-12 | **阶段五（构建与测试按责任拆分）**：CKM-3 的主机侧实现（事务引擎 + `.ckc` 容器 + 两份套件）不再住在内核仓库 —— `tools/pkgmgr/` → `userland/pkgmgr/`、`tests/test_{ckc,cpm}.py` → `userland/pkgmgr/tests/`，内核侧 `make test-pkg` 改为**跨仓库转发**，用户态侧用 `make -C userland test-pkg` 直接跑；内核 `make test-all` 收敛为纯内核（18 目标），新增 `test-all-with-userland`/`test-orch-userland`，编排场景用 `tags` 分组（`testorch -tag`/`-exclude-tag`）。**CKM 的内核侧机制不变**（能力位/审计/状态区），只是交付物落在 `userland/`；详见 [pure-kernel.md](./pure-kernel.md) 8.3 与 [../userland/pkgmgr/README.md](../userland/pkgmgr/README.md) |
+| 2026-10-12 | **CKM-3 落地（事务引擎，主机侧 = H-06 P0b）**：新增 `userland/pkgmgr/cpm.py`（回执 + 事务日志 + stage/verify/activate/commit + 逆序回滚 + `recover` + `gc` + 单写者锁 + 失败注入；**备份与 `activate` 记录都在写目标之前落日志**，因此「写到一半掉电」可恢复）；`userland/pkgmgr/ckc.py` 拆出 `manifest_from_data`，使**安装期重跑域边界/路径白名单**（`make test-pkg` 的 37 项不变）；新增 `userland/pkgmgr/tests/test_cpm.py`（`make test-cpm`，**63 项**，含系统 `tar` 独立复核、逐字节回滚比对、手工拼的越界包零写入）；`make test-pkg` 改为 `test-ckc + test-cpm`；新增 **9.3 落地清单**，第 9 节 CKM-3 行改 ✅，第 10 节补 CKM-3 覆盖情况（第 3 条通过；第 2 条仅哈希/ABI 面，签名面阻塞于开放问题 4）；同步 [package-manager.md](./package-manager.md) 11.1/12.1/14 |
 | 2026-10-12 | **CSS-3 盘符接入（CKM 判定点 8 + CKM-2 状态区）落地**：`storage_assign_letter`(264)/`storage_mount`(262)/`storage_unmount`(263) 实现后，存储受控动作真的走 CKM —— 拒绝三件套（`-EPERM` + 审计 + 串口 `ckm: policy op=storage_mount … result=deny need=0x10`）与允许面都有实测（`make test-ckm` 的 uid 2000 拒绝；`make test-programs` 的 Shell uid 1000 `volumes demo` 成功）；**CKM-2 状态区的第一个存储侧消费者**出现：盘符表把自定义映射写进键 `storage/letters`（值是可读文本 `C=fs:1a2b3c4d;Z=raw:4`），跨重启读回由 `make test-ckm-store` 的两次启动给出 —— 即 3.4 硬约束第 3 条「可写区同时是字母表落点」已兑现；判定点 8 不再只是设计（见 [storage.md](./storage.md) 6.6/13） |
+| 2026-10-12 | **阶段三（ABI 单一事实源）**：CKM 的 ABI 常量不再由内核与 libc 各写一份 —— `CKM_ABI_VERSION`、审计/组件记录尺寸、6 个能力位、事件编号 1–16、受保护前缀全部移入 `abi::ckm`（`abi/src/ckm.rs`）；内核 `ckm::{mod,audit,state,policy}.rs` 与 `security/capability.rs` 改为再导出/推导（`Op::code`/`from_code` 的 32 处数字改 `abi::ckm::OP_*`，能力集另加 3 条编译期断言），`libc` 侧 19 个常量改为值绑定；`make abi-check` 固化。行为零变化：`make test-ckm`（44+3 / 8+2 / 6+3 断言）全 PASS |
 | 2026-10-12 | **CKM-2 落地**：新增 `kernel/src/ckm/store.rs`（系统盘尾部 1 MiB 的**双槽 A/B + CRC32** 状态区：`init`/`get`/`put` + 跨重启自测；`kernel_main` 在 `storage::init` 之后调用）与 `kernel/src/ckm/overlay.rs`（覆盖层注册表 `register`/`unregister`/`lookup`/`rewrite` + 最长前缀/优先级/同优先级冲突拒绝；判定点 7/8 的落点）；`fs::mount::resolve`/`route` 在查表之前接入路径改写（空表快路径），`fs::overlay_selftest` 在 `fs/` 侧建立 `/ckm/overlay/**` 并断言「注册/撤销改变 `open` 结果」；`policy::reject` 新增**语义拒绝**（`need=0x0`，与能力不足可区分）；`tools/image-builder/build_image.py` 改为「先在 63 MiB 上 `mformat`、再追加 1 MiB 保留区」（设备仍是 64 MiB，FAT 看不到状态区）；新增 `make test-ckm-store` 与 `tests/test_ckm_store.py`（两阶段启动：写 → 重启 → 读回）、`test_boot.py --persist`、编排器场景 `ckm-store`（`ckm` 场景同步扩充）；`test-ckm` 扩到 40 断言 + 持久化两启动，`test-fat`/`test-programs`/`test-storage` 的 FAT 几何与根目录条目数断言随之更新（启动盘 FAT 63 MiB、`/ckm` 使根目录 5 → 6 项）；**开放问题 1 定夺为 (b)**；新增 9.2 落地清单，第 10 节补 CKM-2 覆盖情况 |
 | 2026-10-12 | **CKM-1 落地**：`kernel/src/ckm/`（`cred`/`policy`/`state`/`audit`/`api`）+ v1.0 `security/`（凭证 uid/gid + mode + `EACCES`）+ syscall `257`/`258`/`259` + 判定点 1/3/5/6 的强制落点与串口证据；`libc` 加三个包装与 48/64 字节记录解析器，`/init` 与 `/bin/hello` 分别提供允许/拒绝证据；新增 `make test-ckm`（22 断言）与编排器场景 `ckm`，`test-user`/`test-proc` 同步扩展；同批修掉一处**内核栈对齐 UB**（新增静态量把 `KSTACKS` 顶端挤到奇地址，syscall 参数帧 `&[u64; 5]` 因此不对齐 —— `process::kstack_top` 现在显式对齐到 16 字节）。头部状态改为「CKM-1 已落地」，第 9 节 CKM-1 行改 ✅ 并新增 **9.1 落地清单**，第 10 节补覆盖情况，4.5 的 `rev` 示例补 `0x` 前缀 |
 | 2026-10-11 | 追加**存储侧接口**（配合新建的 [storage.md](./storage.md)，CSS 提案）：能力位由 4 位扩到 **6 位**（`CAP_STORAGE_ADMIN 0x10` / `CAP_STORAGE_FORMAT 0x20`，uid 1000 持有，`/init` 与 `ckmd` 不持有）、判定点表追加 **8–10**（挂载/卸载/字母/重扫、格式化、写 `/storage/**`）、事件枚举追加 **12–16**（`storage_mount`/`storage_unmount`/`storage_letter`/`storage_format`/`storage_rescan`，串口短名同步）、号段说明注明 **CSS 占 261–266 故 `SYS_MAX` 最终值为 267**（CKM 自身号段仍为 257–260）、现状审计补「分区/卷/盘符」一行（归属 CSS）、CKM-2 硬约束补第 3 条（可写区同时是字母表落点）与开放问题 1 的边界澄清（原子状态区 vs 文件语义写入） |

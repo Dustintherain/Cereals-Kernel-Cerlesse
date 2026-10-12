@@ -19,21 +19,13 @@ use crate::fs::vfs;
 
 /// fd 槽位总数（0..=15；0/1/2 保留）。
 pub const FD_MAX: usize = 16;
-/// 第一个动态分配的 fd。
-pub const FD_FIRST_DYNAMIC: i32 = 3;
 
-/// `open` 标志：只读。
-pub const O_RDONLY: i32 = 0;
-/// `open` 标志：只写。
-pub const O_WRONLY: i32 = 1;
-/// `open` 标志：读写。
-pub const O_RDWR: i32 = 2;
-/// `open` 标志：不存在则创建。
-pub const O_CREAT: i32 = 0o100;
-/// 访问模式掩码（低 2 位）。
-pub const O_ACCMODE: i32 = 0o3;
-/// 允许出现在 `flags` 里的位（其余位一律 [`vfs::EINVAL`]）。
-pub const O_ALLOWED: i32 = O_ACCMODE | O_CREAT;
+/// fd 编号与 `open` 标志（**再导出**，定义在 `abi::flags` —— 这是 ABI，
+/// 用户态按同一批位值调用 `open`）。`O_ALLOWED` 是「允许出现在 `flags` 里的位」，
+/// 其余位一律 [`vfs::EINVAL`]（不静默忽略）。
+pub use abi::flags::{
+    FD_FIRST_DYNAMIC, O_ACCMODE, O_ALLOWED, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY,
+};
 
 /// 打开模式。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

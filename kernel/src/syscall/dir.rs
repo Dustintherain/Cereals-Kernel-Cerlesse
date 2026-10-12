@@ -5,7 +5,11 @@
 //! 目录列举接到 syscall 上，形状与 `open`/`execve` 完全一致：路径用
 //! **指针 + 长度**（不在不可信内存里找终止符），输出写到用户提供的缓冲。
 //!
-//! ## 记录格式（`getdents` 的 ABI，`libc::DIRENT_SIZE` 必须与这里一致）
+//! ## 记录格式（`getdents` 的 ABI）
+//!
+//! **记录的权威布局在 `abi::dirent`**（阶段三起）：内核与 libc 引用同一份定义，
+//! 不再靠「`libc::DIRENT_SIZE` 必须与这里一致」的注释维持。下面复述一遍是为了
+//! 在 syscall 层能直接读到每一段的含义。
 //!
 //! 一次调用把整目录**定长记录**顺序写进用户缓冲 —— 定长让用户态不必解析
 //! 变长链表，内核对每条记录的写入也都是常数时间、不依赖目录大小：
@@ -33,20 +37,16 @@
 //! 缓冲比一条记录还小是用法错误（[`EINVAL`]），而不是静默返回 0：
 //! 静默会让 `ls` 显示「空目录」，与「缓冲太小」混为一谈。
 
+use abi::errno::EINVAL;
 use crate::driver::serial;
 use crate::fs::vfs;
 use crate::syscall::address_space::UserSpace;
 use crate::syscall::file::{user_bytes, user_bytes_mut};
 
-/// 单条目录记录的字节数。**改它就等于改 ABI**（`libc` 里有一份同名常量）。
-pub const DIRENT_SIZE: usize = 88;
-/// 记录里名字字段的容量（长于此的名字被截断，`name_len` 如实变小）。
-pub const DIRENT_NAME_MAX: usize = 64;
-/// 路径长度上限（与 `open`/`execve` 一致）。
-const PATH_MAX: u64 = 256;
-
-/// `-EINVAL`：参数非法（路径长度、缓冲大小等）。
-const EINVAL: i64 = -22;
+/// 单条目录记录的字节数与名字字段容量（**再导出**，定义在 `abi::dirent`）。
+pub use abi::dirent::{DIRENT_SIZE, NAME_MAX as DIRENT_NAME_MAX};
+/// 路径长度上限（与 `open`/`execve` 一致；定义在 `abi::limits`）。
+const PATH_MAX: u64 = abi::limits::PATH_MAX;
 
 /// 系统调用 `getdents(path_ptr, path_len, buf_ptr, buf_len)`：列举目录。
 ///

@@ -36,8 +36,9 @@ use crate::driver::serial;
 
 pub use crate::syscall::address_space::UserSpace;
 
-/// 未实现系统调用的统一返回码（`-ENOSYS`）。
-pub const ENOSYS: i64 = -38;
+/// 未实现系统调用的统一返回码（`-ENOSYS`）—— **值来自 ABI 单一事实源**
+/// （`abi::errno`，见 `docs/pure-kernel.md` 阶段三）。
+pub use abi::errno::ENOSYS;
 
 /// `syscall` 指令的 Rust 分发入口（由 `trampoline::syscall_entry` 调用）。
 ///

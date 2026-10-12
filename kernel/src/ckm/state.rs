@@ -22,10 +22,10 @@
 use crate::driver::serial;
 use crate::fs::vfs::{EEXIST, EINVAL, ENOSPC};
 
-/// 组件状态记录长度（字节）—— ABI，libc 的 `COMPONENT_RECORD_SIZE` 必须相等。
-pub const COMPONENT_RECORD_SIZE: usize = 64;
-/// `id` 字段宽度（NUL 填充；`[A-Za-z0-9._-]{1,15}`）。
-pub const COMPONENT_ID_LEN: usize = 16;
+/// 组件状态记录长度（字节）—— **再导出**，定义在 `abi::ckm`。
+pub use abi::ckm::COMPONENT_RECORD_SIZE;
+/// `id` 字段宽度（NUL 填充；`[A-Za-z0-9._-]{1,15}`）—— 由 ABI 的字符上限推导。
+pub const COMPONENT_ID_LEN: usize = abi::ckm::COMPONENT_ID_MAX + 1;
 /// 内核引导组件的版本号（没有清单，给一个确定的整数而不是 0）。
 pub const BOOTSTRAP_VERSION_CODE: u32 = 1;
 
