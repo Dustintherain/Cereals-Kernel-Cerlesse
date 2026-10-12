@@ -38,7 +38,7 @@
 | DRM/KMS 对象（CRTC/Plane/Encoder/Connector/Framebuffer） | **无** | — |
 | 输入核心 / evdev | **无**。PS/2 键盘只有一条私有路径：IRQ1 → set 1 解码 → 128 字节行缓冲 → 串口回显 | `driver/keyboard.rs`（`decode_set_1_scan`/`take_line`，不是 evdev 事件） |
 | uinput | **无** | — |
-| ioctl | **无**（syscall 表：`0..=255` Linux 号段里已实现 read/write/open/close/mmap/brk/getpid/sleep/fork/exec/exit/wait/getdents；扩展号段 `getprocs=256`、CSS `storage_volumes=261`/`storage_rescan=265`；`SYS_MAX=267`） | `syscall/syscall_table.rs` |
+| ioctl | **无**（syscall 表：`0..=255` Linux 号段里已实现 read/write/open/close/mmap/brk/getpid/sleep/fork/exec/exit/wait/getdents；扩展号段 `getprocs=256`、CSS `storage_volumes=261`/`storage_rescan=265`；`SYS_MAX=267`） | `abi/src/syscall.rs`（单一事实源）+ `syscall/syscall_table.rs`（排表） |
 | poll / epoll / select | **无** | — |
 | 设备模型 / `/dev` | **无**：没有设备节点、没有设备号；fd 0/1/2 是保留位（stdin=键盘行缓冲、stdout/stderr=串口），fd ≥ 3 一律是 RAMFS 文件 | `fs/file.rs`、`docs/syscall.md` 2.7 |
 | `/proc` / `/sys` | **无**（进程表靠扩展 syscall `getprocs=256` 暴露；udev/logind/`ps`/`top` 都读 `/proc`、`/sys`） | `syscall/process.rs::sys_getprocs` |

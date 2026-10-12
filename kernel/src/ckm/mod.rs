@@ -36,7 +36,7 @@ pub mod store;
 /// （`ext.abi_kernel == CKM_ABI_VERSION`，`docs/ckm.md` 4.2）。
 /// 它与 syscall 号段边界（`SYS_MAX`）**是两个独立的版本号**：前者约束管理接口 / 记录布局，
 /// 后者约束「哪个调用号存在」。
-pub const CKM_ABI_VERSION: u32 = 1;
+pub use abi::ckm::ABI_VERSION as CKM_ABI_VERSION;
 
 /// 管理员 uid（阶段 1 = 内核常量；阶段 4 起由签名配置决定，见开放问题 3）。
 pub const CKM_ADMIN_UID: u32 = crate::security::credential::ADMIN_UID;
@@ -45,7 +45,8 @@ pub const CKM_ADMIN_UID: u32 = crate::security::credential::ADMIN_UID;
 pub const AUDIT_CAPACITY: usize = 64;
 
 /// 组件/扩展状态表容量（固定容量 + 明确拒绝，与 `driver` 注册表、进程表同风格）。
-pub const STATE_SLOTS: usize = 32;
+/// **再导出**，定义在 `abi::ckm::MAX_COMPONENTS`（阶段三的单一事实源）。
+pub use abi::ckm::MAX_COMPONENTS as STATE_SLOTS;
 
 /// 已初始化标志（[`api::init`] 幂等）。
 static mut INITIALIZED: bool = false;

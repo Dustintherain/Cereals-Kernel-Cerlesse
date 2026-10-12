@@ -6,13 +6,16 @@
 | ---- | ---- | ---- | ---- |
 | `image-builder/` | 组装 boot + kernel + 文件系统磁盘镜像（64 MiB 设备；**FAT 只占前面 63 MiB**，尾部 1 MiB 是 CKM 状态区，见下，mtools） | v0.1 / CKM-2 | ✅ |
 | `check-boundary.py` | **内核/用户态边界门禁**（内核不得调用外部命令/内嵌用户态字节/依赖用户态包），含 `--selftest` 反向自检 | 纯内核化阶段二 | ✅ |
-| `check_user_elf.py` | 用户程序 ELF 段布局检查（基址/页对齐/`W^X`/映像窗口/无重定位）——**由 `userland/Makefile` 调用**（它检查的是用户态产物） | v0.7 | ✅ |
+| ~~`check_user_elf.py`~~ → `userland/tools/check_user_elf.py` | 用户程序 ELF 段布局检查（基址/页对齐/`W^X`/映像窗口/无重定位）——由 `userland/Makefile` 调用（它检查的是用户态产物）；**阶段五已迁出本目录** | v0.7 / 阶段五 | ✅ |
 | `mkfs/` | 文件系统镜像生成（FAT12/16/32 空盘或预置目录树，供磁盘 FS 测试）；**已追加 GPT/MBR 分区表镜像生成**（GPT 两分区 / MBR 双分区 / 主表头损坏 / 无分区表四类夹具，见 `docs/storage.md` 第 9 节 `make storage-images`） | v0.8 / CSS-1 | ✅ |
-| `pkgmgr/ckc.py` | **CKC 包容器（后缀 `.ckc`）**：`pack` / `verify` / `info`（确定性 ustar + 64 字节头） | H-06 P0a | ✅ |
-| `pkgmgr/cpm.py` | **包事务引擎**（H-06 P0b = CKM-3）：`init`/`add`/`remove`/`rollback`/`status`/`ls`/`verify`/`plan`/`apply`/`recover`/`gc` + 回执/事务日志/单写者锁 | H-06 P0b | ✅ |
+| ~~`pkgmgr/ckc.py`~~ → `userland/pkgmgr/ckc.py` | **CKC 包容器（后缀 `.ckc`）**：`pack` / `verify` / `info`（确定性 ustar + 64 字节头）—— **阶段五已迁出本目录** | H-06 P0a | ✅ |
+| ~~`pkgmgr/cpm.py`~~ → `userland/pkgmgr/cpm.py` | **包事务引擎**（H-06 P0b = CKM-3）：`init`/`add`/`remove`/`rollback`/`status`/`ls`/`verify`/`plan`/`apply`/`recover`/`gc` + 回执/事务日志/单写者锁 —— **阶段五已迁出本目录** | H-06 P0b | ✅ |
 | （tests/ 驱动） | QEMU 启动与串口日志断言 | v0.1 | ✅ |
 
-状态：均已实现（`pkgmgr/` 实现 P0a + P0b；catalog 签名/`trust` 仍待做，见 `docs/package-manager.md` 11.1 与开放问题 13.1）。
+状态：本目录现有工具（`image-builder/`、`mkfs/`、`check-boundary.py`）均已实现。**阶段五已把归属用户态的工具迁出**：
+`pkgmgr/`（`ckc.py` + `cpm.py`）→ `userland/pkgmgr/`，`check_user_elf.py` → `userland/tools/` ——
+下文两节保留接口摘要，实现与验收见 [`userland/pkgmgr/README.md`](../userland/pkgmgr/README.md)。
+catalog 签名/`trust` 仍待做，见 `docs/package-manager.md` 11.1 与开放问题 13.1。
 
 边界门禁（`make check-boundary`）的六项检查与它们在纯内核化前后的实测结果：
 
@@ -79,16 +82,16 @@ CSS（[docs/storage.md](../docs/storage.md)）的验收要求「内核与宿主�
 装好 `gdisk`/`parted` 后补一次独立复核（见 `docs/storage.md` 开放问题 4）；
 FAT 仍以 `mtools` 为准；ext2/ext4 夹具用系统 `mkfs.ext*` 生成、用 `dumpe2fs` 复核。
 
-## `pkgmgr/ckc.py` —— CKC 包容器（`.ckc`）
+## `userland/pkgmgr/ckc.py` —— CKC 包容器（`.ckc`）（阶段五已迁出 `tools/`）
 
 内核对包管理器的设计见 `docs/package-manager.md`（3.2 是容器规格）。这里是 P0a 的实现：
 后缀 `.ckc`（CKC = Cerlesse Kernel Container）、头魔数 `CKC\x01`、payload 是**确定性 ustar**，
 身份 = payload 的 SHA-256（与打包时间/机器无关）。
 
 ```bash
-python3 tools/pkgmgr/ckc.py pack   user/hello -o build/hello-0.9.0.ckc --print-rev
-python3 tools/pkgmgr/ckc.py verify build/hello-0.9.0.ckc
-python3 tools/pkgmgr/ckc.py info   build/hello-0.9.0.ckc
+python3 userland/pkgmgr/ckc.py pack   user/hello -o build/hello-0.9.0.ckc --print-rev
+python3 userland/pkgmgr/ckc.py verify build/hello-0.9.0.ckc
+python3 userland/pkgmgr/ckc.py info   build/hello-0.9.0.ckc
 ```
 
 `pack` 的输入是一棵带 `PKG.toml` 的目录树（只支持一个明确的 TOML 子集，见模块文档），
@@ -96,24 +99,24 @@ python3 tools/pkgmgr/ckc.py info   build/hello-0.9.0.ckc
 超长路径（ustar 字段 100 字节）。退出码与 `docs/package-manager.md` 9.2 一致：
 `0` 成功、`1` 用法/参数错误、`2` 校验失败、`4` I/O 错误。
 
-**验证**：`make test-pkg`（= `test-ckc` + `test-cpm`，不启 QEMU）。`test-ckc`（`tests/test_ckc.py`，37 项）
+**验证**：`make test-pkg`（= `test-ckc` + `test-cpm`，不启 QEMU）。`test-ckc`（`userland/pkgmgr/tests/test_ckc.py`，37 项）
 其中最后几项是**独立复核**：用系统 `tar` 读同一段 payload，条目清单与文件内容必须与 `ckc.py` 一致
 （与自己验自己相对，与 `mkfs` + mtools 的做法同理）。
 
-## `pkgmgr/cpm.py` —— 包事务引擎（H-06 P0b = CKM-3）
+## `userland/pkgmgr/cpm.py` —— 包事务引擎（H-06 P0b = CKM-3）（阶段五已迁出 `tools/`）
 
 把已校验的 `.ckc` **安全地落进 scope 并可以撤销**：事务（`plan → stage → verify → activate → commit`，
 可回滚）、回执、供掉电恢复的事务日志、`recover`、`gc` 与单写者锁。
 规格是 `docs/package-manager.md` 第 3.5/3.6/4/5/7/8/9 节，与 `docs/ckm.md` 第 7 节（事务阶段 ↔ CKM 状态机）对应。
 
 ```bash
-python3 tools/pkgmgr/cpm.py init   --root build/cpm-root
-python3 tools/pkgmgr/cpm.py add    hello --root build/cpm-root --from build/hello-0.9.0.ckc --scope user
-python3 tools/pkgmgr/cpm.py status --root build/cpm-root --json
-python3 tools/pkgmgr/cpm.py verify --root build/cpm-root
-python3 tools/pkgmgr/cpm.py rollback hello --root build/cpm-root --scope user --offline
-python3 tools/pkgmgr/cpm.py recover --root build/cpm-root     # 回滚未提交事务（掉电后）
-python3 tools/pkgmgr/cpm.py gc --root build/cpm-root --dry-run
+python3 userland/pkgmgr/cpm.py init   --root build/cpm-root
+python3 userland/pkgmgr/cpm.py add    hello --root build/cpm-root --from build/hello-0.9.0.ckc --scope user
+python3 userland/pkgmgr/cpm.py status --root build/cpm-root --json
+python3 userland/pkgmgr/cpm.py verify --root build/cpm-root
+python3 userland/pkgmgr/cpm.py rollback hello --root build/cpm-root --scope user --offline
+python3 userland/pkgmgr/cpm.py recover --root build/cpm-root     # 回滚未提交事务（掉电后）
+python3 userland/pkgmgr/cpm.py gc --root build/cpm-root --dry-run
 ```
 
 目录骨架：`scopes/<scope>/`（生效文件）、`store/sha256/`（内容寻址 blob，同内容只存一份）、
@@ -124,7 +127,7 @@ python3 tools/pkgmgr/cpm.py gc --root build/cpm-root --dry-run
 **安装期不假设「打包期检查过了」**：`cpm` 会用 `ckc.manifest_from_data` 把域边界、scope 路径白名单、
 特权位、重复 target 在写任何文件之前**再跑一遍**（`docs/ckm.md` 3.4 判定点 1 的前置）。
 
-**验证**：`make test-cpm`（`tests/test_cpm.py`，63 项，不启 QEMU）—— 成功/幂等/原子失败/掉电与 `recover`/
+**验证**：`make test-cpm`（`userland/pkgmgr/tests/test_cpm.py`，63 项，不启 QEMU）—— 成功/幂等/原子失败/掉电与 `recover`/
 离线回退/篡改检出与自愈/越界包零写入/去重/并发锁/卸载保留配置，含系统 `tar` 独立复核。
 测试开关（仅用于注入失败，不靠真断电）：`--fail-after <阶段>`（自动回滚、退出码 3）与
 `--crash-after <阶段>`（硬退出、把未提交事务留给 `recover`）。

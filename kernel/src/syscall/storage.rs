@@ -32,10 +32,8 @@ use crate::storage::registry;
 use crate::storage::volume::VOLUME_RECORD_SIZE;
 use crate::syscall::address_space::UserSpace;
 
-/// `-EINVAL`：缓冲区/参数非法。
-const EINVAL: i64 = -22;
-/// `-EIO`：扫描/读取设备失败。
-const EIO: i64 = -5;
+/// `-EINVAL`：缓冲区/参数非法；`-EIO`：扫描/读取设备失败。**定义在 `abi::errno`**。
+use abi::errno::{EINVAL, EIO};
 
 /// 系统调用 `storage_volumes(buf_ptr, buf_len, out_count_ptr, 0, 0)`。
 ///
@@ -111,7 +109,7 @@ pub unsafe fn sys_storage_rescan(args: &[u64; 5], _space: *const UserSpace) -> i
         return errno;
     }
 
-    if index == u32::MAX {
+    if index == abi::volume::RESCAN_ALL {
         return match registry::scan_all(true) {
             Ok(count) => {
                 serial::print("user: storage_rescan disk=all volumes=");
@@ -199,7 +197,11 @@ pub unsafe fn sys_storage_mount(args: &[u64; 5], space: *const UserSpace) -> i64
         return errno;
     }
 
-    let options = if flags & 1 != 0 { MountOptions::RO } else { MountOptions::RW };
+    let options = if flags & abi::volume::MOUNT_RDONLY != 0 {
+        MountOptions::RO
+    } else {
+        MountOptions::RW
+    };
     match crate::fs::mount_volume_by_id(&vol_id, &point, options) {
         Ok(()) => {
             serial::print("user: storage_mount vol=");

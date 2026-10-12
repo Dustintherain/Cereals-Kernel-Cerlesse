@@ -2,7 +2,7 @@
 
 - 阶段：第一阶段 / 文档中心
 - 最后更新：2026-10-11
-- 状态：🟡 持续更新（2026-10-11 同步 v0.9 第六步（**内核侧最小动态链接**：`PT_INTERP` + `DT_NEEDED` + `RELATIVE`/`JUMP_SLOT`）实现记录；同日已同步第五步基础用户程序、第四步简化网络栈、第三步进程对象、第二步交互式 Shell、第一步用户堆、v0.8 收官与 H-06 包管理器 `.ckc` 提案 P0a；同日新增 **desktop.md**（v1.0 之后的桌面环境兼容路线，规划）；同日新增 **pure-kernel.md**（纯内核化改造规划：现状审计 + 逐文件迁移清单 + 六阶段 Cargo/构建/验收规格）；
+- 状态：🟡 持续更新（2026-10-11 同步 v0.9 第六步（**内核侧最小动态链接**：`PT_INTERP` + `DT_NEEDED` + `RELATIVE`/`JUMP_SLOT`）实现记录；同日已同步第五步基础用户程序、第四步简化网络栈、第三步进程对象、第二步交互式 Shell、第一步用户堆、v0.8 收官与 H-06 包管理器 `.ckc` 提案 P0a；同日新增 **desktop.md**（v1.0 之后的桌面环境兼容路线，规划）；同日新增 **pure-kernel.md**（纯内核化改造规划：现状审计 + 逐文件迁移清单 + 六阶段 Cargo/构建/验收规格）；同日推进 **纯内核化阶段三**：新增 `abi/` crate（系统调用 ABI 单一事实源，内核 18 文件 + libc 45 常量改为引用它）；
 同日**执行其中阶段二/四/五（部分）**：`libc/`+`user/` 移入 `userland/` 独立 workspace、内核构建按 `manifest.txt` 内嵌（无用户态也能构建与启动）、新增 `tools/check-boundary.py` 边界门禁；同日新增 **storage.md**（CSS 存储管理规划：卷模型 / 盘符与挂载 / VFS 收口 / 与 CKM 的存储接口））
 
 > 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
@@ -17,8 +17,8 @@
 | ---- | ---- | ---- |
 | [architecture.md](./architecture.md) | 第一阶段：内核架构、语言分工、目标与非目标 | ✅ 已完成（会随开发反复修订） |
 | [lang-selection.md](./lang-selection.md) | 按功能领域汇总的性能最佳语言对照（辅助选型参考） | ✅ 新增（2026-10-07） |
-| [package-manager.md](./package-manager.md) | 面向内核/系统生态的高效、安全、轻量、灵活包管理器设计提案（H-06） | 🟡 提案 v1 + **P0a/P0b 已落地**：包容器后缀 **`.ckc`**（CKC，64 字节头 + 确定性 ustar，身份 = payload 哈希，`tools/pkgmgr/ckc.py`）+ **事务引擎**（`tools/pkgmgr/cpm.py`：回执/事务日志/stage→commit/回滚/`recover`/`gc`/单写者锁/失败注入）；验收 `make test-pkg` = `test-ckc` 37 + `test-cpm` **63** 项；catalog 签名（阻塞于开放问题 13.1）与内核侧接入（P1）待做，见该文档 11.1 |
-| [ckm.md](./ckm.md) | **Cerlesse Kernel Manager（CKM）设计提案**：权限模型（单管理员 + 能力位 + 判定点）、内核接口（`kernel/src/ckm/` + 扩展号段 + 定长记录）、扩展生命周期与覆盖层、事务/恢复/安全模式、CKM-1…CKM-7 分期与故障验收 | 🟡 **CKM-1/CKM-2/CKM-3 已落地**（内核：`kernel/src/ckm/` 七模块 + 覆盖层 + 双槽 A/B 状态区，syscall 257–259，`make test-ckm` 40 断言 + `make test-ckm-store` 跨重启；**CKM-3 事务引擎在主机侧**：`tools/pkgmgr/cpm.py`，`make test-cpm` 63 项）；CKM-4…CKM-7 规划中 |
+| [package-manager.md](./package-manager.md) | 面向内核/系统生态的高效、安全、轻量、灵活包管理器设计提案（H-06） | 🟡 提案 v1 + **P0a/P0b 已落地**：包容器后缀 **`.ckc`**（CKC，64 字节头 + 确定性 ustar，身份 = payload 哈希，`userland/pkgmgr/ckc.py`）+ **事务引擎**（`userland/pkgmgr/cpm.py`：回执/事务日志/stage→commit/回滚/`recover`/`gc`/单写者锁/失败注入）；验收 `make test-pkg` = `test-ckc` 37 + `test-cpm` **63** 项；catalog 签名（阻塞于开放问题 13.1）与内核侧接入（P1）待做，见该文档 11.1 |
+| [ckm.md](./ckm.md) | **Cerlesse Kernel Manager（CKM）设计提案**：权限模型（单管理员 + 能力位 + 判定点）、内核接口（`kernel/src/ckm/` + 扩展号段 + 定长记录）、扩展生命周期与覆盖层、事务/恢复/安全模式、CKM-1…CKM-7 分期与故障验收 | 🟡 **CKM-1/CKM-2/CKM-3 已落地**（内核：`kernel/src/ckm/` 七模块 + 覆盖层 + 双槽 A/B 状态区，syscall 257–259，`make test-ckm` 40 断言 + `make test-ckm-store` 跨重启；**CKM-3 事务引擎在主机侧**：`userland/pkgmgr/cpm.py`，`make test-cpm` 63 项）；CKM-4…CKM-7 规划中 |
 | [storage.md](./storage.md) | **Cerlesse Storage System（CSS）设计提案**：卷模型（设备→分区→卷→盘符/挂载点 + 稳定 `vol_id`）、Windows 式盘符与 Linux 式挂载双视图、VFS 收口（`FileSystem` 增量 + 挂载表带卷身份 + 错误语义改 errno）、与 CKM 的接口（2 个能力位 + 判定点 8–10 + 号段 261–266）、文件系统支持路线与第三方依赖政策、后端装载政策（第一版编译内置，6.8）、CSS-1…CSS-6 分期与 11 条验收 | 🟡 **CSS-1/CSS-2 已落地，CSS-3 大部分落地**（`kernel/src/storage/` + `storage_volumes`(261)/`storage_rescan`(265) + `mkfs` GPT/MBR 夹具 + 挂载表带卷身份/多挂载点/卸载 + 挂载错误改 errno + 盘符表 `storage/letters.rs` + `storage_mount`(262)/`unmount`(263)/`assign_letter`(264) + `libc` 的 `C:\` 重写 + `make test-storage`），CSS-4…CSS-6 规划中 |
 | [project-structure.md](./project-structure.md) | 目录结构与模块职责划分 | ✅ 已完成 |
 | [../DEVELOPMENT.md](../DEVELOPMENT.md) | 主开发文档：需求、依赖、任务清单、测试、QEMU、Issue 规划 | ✅ 已完成 |
@@ -31,7 +31,7 @@
 | [syscall.md](./syscall.md) | 阶段：系统调用 / 用户空间 / ELF | 🟡 v0.7 核心已完成（`syscall`/`sysret` 入口 + ring3 隔离 + `read/write/open/close`+ `write/exit/getpid/sleep` + **ELF Loader** 从 RAMFS `/init` 按段权限装载），v0.9 已落地六步：**用户堆**（3.5）、**`stdin` + 交互式 Shell**（3.6）、**`fork`/`execve`/`wait4` + `argc`/`argv`**（3.7，外部程序 `/bin/hello` 真的能跑）、**基础用户程序 + `getdents`/`getprocs`**（3.8，`/bin/{ls,cat,echo,ps}`）、**内核侧最小动态链接**（3.9，`ET_DYN` + `PT_INTERP` + `DT_NEEDED` + `RELATIVE`/`JUMP_SLOT`，`/bin/dynhello` + `/lib/*`）；**v1.0 第一步：`mprotect`**（3.10，已映射页的保护属性运行期改写 + `PROT_NONE`，W^X 的「先写后换只执行」）；`make test-user` 91 项 / `make test-shell` 11 项 / `make test-proc` 8 项 + 4 正则 / `make test-programs` 17 项 + 5 正则 / `make test-dyn` 10 项 PASS；仍未做：环境变量/文件映射（`mmap` 加 offset）/**完整**动态链接（见 3.4/3.9/3.10） |
 | [filesystem.md](./filesystem.md) | 阶段：VFS / RAMFS / 磁盘文件系统 | ✅ v0.7 + **v0.8 磁盘后端**已完成（VFS trait + 挂载表最长前缀路由 + RAMFS + fd 表；**FAT12/16/32 只读后端** + `tools/mkfs/mkfs.py`，`make test-fs` 21 项 / `make test-fat` 21 项 PASS） |
 | [desktop.md](./desktop.md) | **桌面环境兼容路线（v1.0 之后，规划）**：现状审计、用户态/内核侧归属、D0–D5 分层里程碑与 QEMU 验收 | 📋 规划（2026-10-11 新增） |
-| [pure-kernel.md](./pure-kernel.md) | **纯内核化改造规划（v0.9 之后，规划）**：现状审计（C1–C9，含实测证据）、逐文件迁移清单、内核/用户态双仓库划分、六阶段（Cargo 配置 / 构建目标 / 验收）、七条验收标准对照、非目标 | 📋 规划（2026-10-11 新增） |
+| [pure-kernel.md](./pure-kernel.md) | **纯内核化改造规划与执行记录**：现状审计（C1–C9，含实测证据）、逐文件迁移清单、内核/用户态双仓库划分、六阶段（Cargo 配置 / 构建目标 / 验收）、七条验收标准对照、非目标 | 🟡 执行中（阶段二/三/四 ✅，2026-10-12 更新） |
 
 ## 阶段说明
 
@@ -63,9 +63,11 @@
   D2 显示 → D3 音频 → D4 会话/电源 → D5 收尾）—— 规划见 [desktop.md](./desktop.md)，未开工。
 - **第十阶段（v0.9 之后；执行上排在第九阶段之前）**🟡：**纯内核化边界收敛** —— 内核只提供底层机制，
   Shell / init / libc / coreutils 已拆到独立 workspace [`userland/`](../userland/README.md)；
-  六阶段中 **阶段二（边界门禁）✅、阶段四（用户空间迁移）✅、阶段五（构建/测试拆分）🟡**，
-  阶段一/三/六 未做（`abi/` 单一事实源、编排拆分、基线 tag）。实测：无 `userland/` 的 checkout 里
-  `cargo build -p kernel` 退出码 0（改造前 101）、`make test-kernel-only` 7/7 PASS。
+  六阶段中 **阶段二（边界门禁）✅、阶段三（`abi/` 单一事实源）✅、阶段四（用户空间迁移）✅、
+  阶段五（构建/测试拆分）🟡**；阶段一（基线 tag）与阶段六（接口冻结 / 移植文档）未做。
+  实测：无 `userland/` 的 checkout 里 `cargo build -p kernel` 退出码 0（改造前 101）、
+  `make test-kernel-only` 7/7 PASS、`make abi-check` 7/7（内核与 libc 的调用号/errno/记录布局
+  只有一个定义点，C6 消除）。
   规划与执行记录见 [pure-kernel.md](./pure-kernel.md)。
 - **第十一阶段（v1.0 之后）**🔨：**CKM —— 内核级权限控制与扩展管理**（CKM Core 在内核 /
   CKM Service 与 Manager 在用户态 / 可插拔覆盖层 / 独立恢复环境），分 CKM-1…CKM-7；
@@ -75,8 +77,17 @@
   `make test-ckm`（40 断言）与 `make test-ckm-store`（写 → 重启 → 读回）。
 - **第十二阶段（v1.0 之后，与第十一阶段同期）**🔨：**CSS —— Cerlesse 存储管理系统**（磁盘/分区识别 → 卷与稳定标识 → 盘符与多挂载点 → 可写文件系统 → `ckm storage` 管理程序），分 CSS-1…CSS-6；第一版不写分区表、不做 RAID/LVM/加密卷/GUI。**CSS-1（底层识别）与 CSS-2（VFS 收口）已落地，CSS-3（盘符）大部分落地**（GPT/MBR 只读扫描 + 卷记录 + `storage_volumes`/`storage_rescan` + 挂载表带卷身份/多挂载点/卸载 + 挂载错误改 errno + 盘符表/`storage_mount`/`unmount`/`assign_letter` + `libc` 的 `C:\` 重写），CSS-3 剩余（`/storage/**` 状态树、卷标写/改名）与 CSS-4…CSS-6 未开工 —— 见 [storage.md](./storage.md)。
 - **后续**：每进入一个新阶段就编写/修订对应的主题文档；阶段内已落地部分也要及时补记当前状态（例如 v0.4 中断控制器）。
-- 本套文档**会在开发过程中被反复修改**——修改前请在对应文档顶部记录修订日期与变更点。
-- 本次（2026-10-12，第十九轮）修订重点：**CKM-2（可写持久化 + 覆盖层机制）落地** —— 新增
+- 本套文档**会在开发过程中被反复修改**——修改前请在对应文档顶部记录修订日期与变更点。-  本次（2026-10-12，第二十轮）修订重点：**纯内核化阶段三：`abi/` 单一事实源落地** ——
+  新增 `abi/` crate（`no_std`、零依赖、`forbid(unsafe_code)`）：`syscall`（号 + `SYS_MAX` + 号段规则 +
+  `NAMED`/`UNIMPLEMENTED`）、`errno`、`flags`（`O_*`/`PROT_*`/`MAP_*`/fd）、`limits`（`PATH_MAX`/`IO_MAX`/`ARG_*`）、
+  `dirent`/`procinfo`/`volume`/`ckm`（记录布局、能力位、op 编号、受保护前缀）与 `record`（编译期断言）；
+  内核 18 个文件（`syscall/*` 9 + `fs/file.rs` + `security/capability.rs` + `ckm/{mod,audit,state,policy}.rs` +
+  `storage/volume.rs` 等）与 `libc/src/syscall.rs` 的 45 个常量改为引用它（**对外名字与类型不变**，行为零变化）；
+  新增 `make abi-check` 并并入 `make check`。实测：两处构建退出码 0、`abi-check` 7/7、`check-boundary` 6/6、
+  14 个 QEMU 目标全 PASS；反例：改 `SYS_GETPROCS` → `abi-check` 红（退出码 2）、单侧改 `DIRENT_SIZE` →
+  `test-programs` 红（`ls` 条目找不到）。同步 pure-kernel.md（C6 → ✅、新增 8.2）、syscall.md、
+  project-structure.md、DEVELOPMENT.md（§3/§5 表）、README.md 与 Makefile。
+-  本次（2026-10-12，第十九轮）修订重点：**CKM-2（可写持久化 + 覆盖层机制）落地** —— 新增
   `kernel/src/ckm/store.rs`（系统盘尾部 1 MiB 的双槽 A/B + CRC32 状态区，开放问题 1 定夺为 (b)）与
   `kernel/src/ckm/overlay.rs`（注册/撤销/最长前缀/优先级/冲突拒绝，钩子在 `fs::mount::resolve`），
   `policy::reject`（语义拒绝）与 `fs::overlay_selftest`；`tools/image-builder/build_image.py` 改为
@@ -186,11 +197,12 @@
   （提示符 `root@cerlesse C:>`、内建命令、外部命令真调 `fork()` 暴露 ENOSYS）、新增 `make test-shell`（12 项）
   与编排 `shell` 场景（11 场景）；同步 syscall.md（新增 3.6、3.2/3.3/3.4）、process.md（1.3 阻塞点）、
   drivers.md（键盘行缓冲）、project-structure/roadmap/README/DEVELOPMENT。
+-  本次（2026-10-12，阶段五）修订重点：**构建与测试按责任拆分** —— 归属用户态的主机工具全部迁出内核仓库（`tools/pkgmgr/` + `tests/test_{ckc,cpm}.py` → `userland/pkgmgr/`，`tools/check_user_elf.py` → `userland/tools/`），用户态侧新增 `make -C userland test-pkg`/`test-all`；内核 `make test-all` 收敛为纯内核 18 目标，新增 `test-all-with-userland`/`test-orch-userland`，编排场景用 `tags` 分组（`testorch -tag`/`-exclude-tag`）；详见 [pure-kernel.md](./pure-kernel.md) 8.3 与 [../userland/pkgmgr/README.md](../userland/pkgmgr/README.md)。
 -  本次（2026-10-11，第六轮）修订重点：**H-06 P0a（`.ckc` 包容器）落地** —— 内核包后缀定名为
   `.ckc`（CKC = Cerlesse Kernel Container）：64 字节头（magic/版本/头长/flags/长度/偏移/
   32 字节 payload_sha256/保留位）+ 确定性 ustar（归档名 = 目标路径去 `/`、`PKG.toml` 第一、
   按字节序、mtime/uid/gid 全 0、仅常规文件）；身份 = payload 的 SHA-256；
-  实现 `tools/pkgmgr/ckc.py`（`pack`/`verify`/`info`）、新增 `make test-pkg`（37 项，含系统 `tar` 独立复核）；
+  实现 `userland/pkgmgr/ckc.py`（`pack`/`verify`/`info`；阶段五迁至用户态 workspace）、新增 `make test-pkg`（37 项，含系统 `tar` 独立复核）；
   同步 package-manager.md 3.2/11.1/12.1、DEVELOPMENT.md（H-06 行 + 测试方案）、tools/README.md、
   project-structure.md、README.md。
 -  本次（2026-10-11，第五轮）修订重点：**v0.9 第一步（用户堆）落地** ——

@@ -24,7 +24,8 @@
 | 被破坏的寄存器 | 仅 `rax`、`rcx`、`r11`；其余寄存器（含 `rdi/rsi/rdx/r10/r8/r9`）**保持进入前的值**（入口汇编保存/恢复） |
 | 入口栈 | 内核入口切到**专用系统调用栈**（`syscall` 指令不切栈）；返回前恢复 |
 
-内核入口与分发见 `kernel/src/syscall/trampoline.rs`，号表见 `kernel/src/syscall/syscall_table.rs`。
+内核入口与分发见 `kernel/src/syscall/trampoline.rs`；**调用号与号段规则的权威定义在 `abi/src/syscall.rs`**
+（纯内核化阶段三的单一事实源），内核 `kernel/src/syscall/syscall_table.rs` 只是再导出 + 排表。
 用户态封装见 `libc/src/syscall.rs`。
 
 ### 1.2 调用号总表
@@ -484,11 +485,11 @@ pub trait BlockDevice {
 | 工具 | 命令 | 说明 |
 | ---- | ---- | ---- |
 | 镜像构建 | `tools/image-builder/`（`make image`） | 组装 boot + kernel + 64 MiB FAT 磁盘镜像 |
-| ELF 检查 | `python3 tools/check_user_elf.py <file.elf>` | 段布局/基址/页对齐/`W^X`/窗口/重定位（不启 QEMU） |
+| ELF 检查 | `python3 userland/tools/check_user_elf.py <file.elf>` | 段布局/基址/页对齐/`W^X`/窗口/重定位（不启 QEMU；阶段五起属用户态 workspace） |
 | mkfs | `python3 tools/mkfs/mkfs.py --out <img> --from <dir>` | 生成 FAT12/16/32 镜像；mtools 独立复核（CSS-1 起还生成 GPT/MBR 分区表夹具，`make storage-images`） |
-| CKC 打包 | `python3 tools/pkgmgr/ckc.py pack <tree> -o <out.ckc> [--print-rev]` | 生成 `.ckc` 容器（确定性 ustar + 64 字节头） |
-| CKC 校验 | `python3 tools/pkgmgr/ckc.py verify <file.ckc>` | 校验头字段与 payload 哈希 |
-| CKC 信息 | `python3 tools/pkgmgr/ckc.py info <file.ckc>` | 打印头与条目信息 |
+| CKC 打包 | `python3 userland/pkgmgr/ckc.py pack <tree> -o <out.ckc> [--print-rev]` | 生成 `.ckc` 容器（确定性 ustar + 64 字节头） |
+| CKC 校验 | `python3 userland/pkgmgr/ckc.py verify <file.ckc>` | 校验头字段与 payload 哈希 |
+| CKC 信息 | `python3 userland/pkgmgr/ckc.py info <file.ckc>` | 打印头与条目信息 |
 | 测试编排 (Go) | `go run ./cmd/testorch -config ../tests/orchestrate.json -root ..` | 并行跑场景 + 串口复核 |
 | 串口分析 (Go) | `go run ./cmd/serialmon -file <log> [-once] [-expect S]... [-allow-panic]` | 跟随/快照分析串口日志 |
 

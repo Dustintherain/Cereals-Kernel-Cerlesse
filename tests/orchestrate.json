@@ -72,6 +72,7 @@
     },
     {
       "name": "user",
+      "tags": ["userland"],
       "cmd": [
         "python3", "tests/test_boot.py",
         "--serial-log", "build/orch/user/serial.log",
@@ -180,6 +181,7 @@
     },
     {
       "name": "ckm",
+      "tags": ["userland"],
       "cmd": [
         "python3", "tests/test_boot.py",
         "--serial-log", "build/orch/ckm/serial.log",
@@ -480,6 +482,7 @@
     },
     {
       "name": "shell",
+      "tags": ["userland"],
       "cmd": [
         "python3", "tests/test_keyboard.py",
         "--disk", "build/disk.img",
@@ -521,6 +524,7 @@
     },
     {
       "name": "proc",
+      "tags": ["userland"],
       "cmd": [
         "python3", "tests/test_keyboard.py",
         "--disk", "build/disk.img",
@@ -541,7 +545,7 @@
         "--expect", "sh: bye",
         "--expect", "user: heap frame reclamation PASS",
         "--expect", "user: selftest PASS",
-        "--expect-re", "user: fork parent=3 -> child pid=([0-9]+) image_pages=7.*?user: run child pid=\\1 name=fork-child.*?sh: child pid=\\1 exec /bin/hello \\(argc=2\\).*?user: exec pid=\\1 path=/bin/hello segments=4 image_pages=5 entry=0x8000000000.*?hello-bin: pid=\\1.*?user: reaped pid=\\1 exit=1",
+        "--expect-re", "user: fork parent=3 -> child pid=([0-9]+) image_pages=7.*?user: run child pid=\\1 name=fork-child.*?sh: child pid=\\1 exec /bin/hello \\(argc=2\\).*?user: exec pid=\\1 path=/bin/hello segments=4 image_pages=6 entry=0x8000000000.*?hello-bin: pid=\\1.*?user: reaped pid=\\1 exit=1",
         "--expect-re", "hello-bin: argc=2.*?hello-bin: argv\\[0\\]=hello.*?hello-bin: argv\\[1\\]=world",
         "--expect-re", "user: run child pid=([0-9]+) name=fork-child.*?user: exec /bin/foo -> ENOENT \\(no such program\\).*?user: reaped pid=\\1 exit=127",
         "--expect-re", "user: frames free before=([0-9]+) after=\\1"
@@ -560,6 +564,7 @@
     },
     {
       "name": "programs",
+      "tags": ["userland"],
       "cmd": [
         "python3", "tests/test_keyboard.py",
         "--disk", "build/disk.img",
@@ -690,6 +695,7 @@
     },
     {
       "name": "dyn",
+      "tags": ["userland"],
       "cmd": [
         "python3", "tests/test_boot.py",
         "--serial-log", "build/orch/dyn/serial.log",

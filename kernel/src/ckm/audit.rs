@@ -27,8 +27,9 @@
 use crate::ckm::policy::{Op, RESULT_ALLOW, RESULT_DENY};
 use crate::driver::serial;
 
-/// 审计记录长度（字节）—— ABI，libc 的 `AUDIT_RECORD_SIZE` 必须相等。
-pub const AUDIT_RECORD_SIZE: usize = 48;
+/// 审计记录长度（字节）—— **再导出**，定义在 `abi::ckm`（阶段三的单一事实源；
+/// 本文件上方的布局表就是它对应的字段说明）。
+pub use abi::ckm::AUDIT_RECORD_SIZE;
 
 /// 一条审计记录（内核侧结构）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

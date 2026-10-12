@@ -56,9 +56,9 @@ rev 写作 `sha256:<64 位小写十六进制>`。
 ## 用法
 
 ```bash
-python3 tools/pkgmgr/ckc.py pack   <dir> [-o out.ckc] [--print-rev]
-python3 tools/pkgmgr/ckc.py verify <file.ckc>
-python3 tools/pkgmgr/ckc.py info   <file.ckc>
+python3 userland/pkgmgr/ckc.py pack   <dir> [-o out.ckc] [--print-rev]
+python3 userland/pkgmgr/ckc.py verify <file.ckc>
+python3 userland/pkgmgr/ckc.py info   <file.ckc>
 ```
 
 退出码（与 `docs/package-manager.md` 9.2 一致）：`0` 成功、`1` 用法/参数错误
@@ -278,7 +278,7 @@ def manifest_from_data(data: dict) -> Manifest:
     """从**已解析**的 `PKG.toml` 子集构造并校验 `Manifest`。
 
     与 [`load_manifest`] 共用同一套规则（域边界、scope 路径白名单、特权位、
-    重复 target、hooks 拒绝）。**为什么单独暴露这个函数**：安装期（`tools/pkgmgr/cpm.py`）
+    重复 target、hooks 拒绝）。**为什么单独暴露这个函数**：安装期（同目录的 `cpm.py`）
     必须对 `.ckc` payload 里的 `PKG.toml` **重新**跑一遍这些检查 ——
     「打包期检查过了」不能作为前提，因为一个包从作者手里传出后可以被任何人重新打包，
     而 `verify_bytes` 只做「容器结构 + payload 哈希 + 声明与归档条目一致」，不做白名单判定。

@@ -31,7 +31,7 @@
 //! ## 构建期校验的分工（没有丢）
 //!
 //! 用户程序 ELF 的段布局校验（基址 / 页对齐 / W^X / 映像窗口 / 无可装载重定位）在
-//! **用户态侧**：`tools/check_user_elf.py`（由 `userland/Makefile` 对每个程序调用），
+//! **用户态侧**：`userland/tools/check_user_elf.py`（由 `userland/Makefile` 对每个程序调用，
 //! 动态链接夹具的结构校验在 `userland/tools/check_dyn_fixture.py`。本脚本只做
 //! 「清单自洽 + 文件真的是 ELF」这一层轻校验；运行期装载器（`syscall/elf.rs`）仍会
 //! 独立拒绝畸形映像（`user: ELF rejected: …`）。
@@ -178,7 +178,7 @@ fn embed(userland: &Path, out_dir: &Path) {
         let dst = copy_dir.join(&name);
         let bytes = fs::read(&entry.file)
             .unwrap_or_else(|err| panic!("读取 {} 失败：{err}", entry.file.display()));
-        // 轻校验：真的是 ELF、非空。段布局由用户态侧的 check_user_elf.py 负责。
+        // 轻校验：真的是 ELF、非空。段布局由用户态侧的 userland/tools/check_user_elf.py 负责。
         assert!(
             bytes.len() > 64 && &bytes[..4] == b"\x7fELF",
             "{} 不是 ELF 文件（清单第 `{}` 行）：谁产出的？检查 userland/Makefile",

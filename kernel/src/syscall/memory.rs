@@ -41,12 +41,12 @@ use crate::syscall::address_space::{
 use crate::memory::page::PAGE_SIZE;
 
 /// `-EFAULT`：用户传了不属于自己的地址区间（本模块只在「没有当前用户地址空间」时用）。
-const EFAULT: i64 = -14;
+/// **定义在 `abi::errno`**。
+use abi::errno::EFAULT;
 
 /// `MAP_*`：只支持私有匿名映射；`MAP_FIXED`/`MAP_SHARED` 等一律 `EINVAL`。
-const MAP_PRIVATE: u64 = 0x2;
-const MAP_ANONYMOUS: u64 = 0x20;
-const MAP_SUPPORTED: u64 = MAP_PRIVATE | MAP_ANONYMOUS;
+/// 位值**定义在 `abi::flags`**（阶段三的单一事实源）。
+use abi::flags::{MAP_ANONYMOUS, MAP_SUPPORTED};
 
 /// 取当前用户地址空间的可变引用。
 ///

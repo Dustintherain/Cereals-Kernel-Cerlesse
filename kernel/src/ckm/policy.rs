@@ -26,12 +26,14 @@ pub const RESULT_ALLOW: u8 = 0;
 /// 审计/判定结果：拒绝。
 pub const RESULT_DENY: u8 = 1;
 
-/// 受保护前缀（**内核常量**，写它们额外要求 [`CAP_FS_SYSTEM_WRITE`]）。
+/// 受保护前缀（**再导出**，定义在 `abi::ckm`：前缀**下标就是 ABI**，
+/// `fs_write` 的 `arg` 与证据行的 `detail` 都用它，见 `abi::ckm::PREFIX_*`）。
+/// 写它们额外要求 [`CAP_FS_SYSTEM_WRITE`]。
 ///
 /// 边界判定按路径分隔符做（[`is_protected`]）：`/etc/motd` 命中，
 /// `/etcetera` **不**命中 —— 否则「前缀」会变成「字符串开头」，这是安全判定里
 /// 最经典的一类错误。
-pub const PROTECTED_PREFIXES: [&str; 4] = ["/etc", "/bin", "/lib", "/init"];
+pub use abi::ckm::PROTECTED_PREFIXES;
 
 /// 路径是否落在某个受保护前缀下（边界安全）。
 pub fn is_protected(path: &str) -> bool {
@@ -96,45 +98,47 @@ pub enum Op {
 impl Op {
     /// 编号（进审计记录的 `op` 字段；`docs/ckm.md` 4.6）。
     pub const fn code(self) -> u16 {
+        // 编号**定义在 `abi::ckm`**（阶段三的单一事实源）：用户态按同一批编号
+        // 调用 `ckm_policy_query` 并解析审计记录，两边不可能漂移。
         match self {
-            Op::FsWrite => 1,
-            Op::StateWrite => 2,
-            Op::PolicySet => 3,
-            Op::AuditRead => 4,
-            Op::PolicyQuery => 5,
-            Op::ExecComponent => 6,
-            Op::OverlayRegister => 7,
-            Op::OverlayConflict => 8,
-            Op::SafeModeEnter => 9,
-            Op::TxnCommit => 10,
-            Op::TxnRollback => 11,
-            Op::StorageMount => 12,
-            Op::StorageUnmount => 13,
-            Op::StorageLetter => 14,
-            Op::StorageFormat => 15,
-            Op::StorageRescan => 16,
+            Op::FsWrite => abi::ckm::OP_FS_WRITE,
+            Op::StateWrite => abi::ckm::OP_STATE_WRITE,
+            Op::PolicySet => abi::ckm::OP_POLICY_SET,
+            Op::AuditRead => abi::ckm::OP_AUDIT_READ,
+            Op::PolicyQuery => abi::ckm::OP_POLICY_QUERY,
+            Op::ExecComponent => abi::ckm::OP_EXEC_COMPONENT,
+            Op::OverlayRegister => abi::ckm::OP_OVERLAY_REGISTER,
+            Op::OverlayConflict => abi::ckm::OP_OVERLAY_CONFLICT,
+            Op::SafeModeEnter => abi::ckm::OP_SAFE_MODE_ENTER,
+            Op::TxnCommit => abi::ckm::OP_TXN_COMMIT,
+            Op::TxnRollback => abi::ckm::OP_TXN_ROLLBACK,
+            Op::StorageMount => abi::ckm::OP_STORAGE_MOUNT,
+            Op::StorageUnmount => abi::ckm::OP_STORAGE_UNMOUNT,
+            Op::StorageLetter => abi::ckm::OP_STORAGE_LETTER,
+            Op::StorageFormat => abi::ckm::OP_STORAGE_FORMAT,
+            Op::StorageRescan => abi::ckm::OP_STORAGE_RESCAN,
         }
     }
 
     /// 由编号还原（读审计记录时用；未知编号返回 `None`，**不猜**）。
     pub const fn from_code(code: u16) -> Option<Op> {
         match code {
-            1 => Some(Op::FsWrite),
-            2 => Some(Op::StateWrite),
-            3 => Some(Op::PolicySet),
-            4 => Some(Op::AuditRead),
-            5 => Some(Op::PolicyQuery),
-            6 => Some(Op::ExecComponent),
-            7 => Some(Op::OverlayRegister),
-            8 => Some(Op::OverlayConflict),
-            9 => Some(Op::SafeModeEnter),
-            10 => Some(Op::TxnCommit),
-            11 => Some(Op::TxnRollback),
-            12 => Some(Op::StorageMount),
-            13 => Some(Op::StorageUnmount),
-            14 => Some(Op::StorageLetter),
-            15 => Some(Op::StorageFormat),
-            16 => Some(Op::StorageRescan),
+            abi::ckm::OP_FS_WRITE => Some(Op::FsWrite),
+            abi::ckm::OP_STATE_WRITE => Some(Op::StateWrite),
+            abi::ckm::OP_POLICY_SET => Some(Op::PolicySet),
+            abi::ckm::OP_AUDIT_READ => Some(Op::AuditRead),
+            abi::ckm::OP_POLICY_QUERY => Some(Op::PolicyQuery),
+            abi::ckm::OP_EXEC_COMPONENT => Some(Op::ExecComponent),
+            abi::ckm::OP_OVERLAY_REGISTER => Some(Op::OverlayRegister),
+            abi::ckm::OP_OVERLAY_CONFLICT => Some(Op::OverlayConflict),
+            abi::ckm::OP_SAFE_MODE_ENTER => Some(Op::SafeModeEnter),
+            abi::ckm::OP_TXN_COMMIT => Some(Op::TxnCommit),
+            abi::ckm::OP_TXN_ROLLBACK => Some(Op::TxnRollback),
+            abi::ckm::OP_STORAGE_MOUNT => Some(Op::StorageMount),
+            abi::ckm::OP_STORAGE_UNMOUNT => Some(Op::StorageUnmount),
+            abi::ckm::OP_STORAGE_LETTER => Some(Op::StorageLetter),
+            abi::ckm::OP_STORAGE_FORMAT => Some(Op::StorageFormat),
+            abi::ckm::OP_STORAGE_RESCAN => Some(Op::StorageRescan),
             _ => None,
         }
     }

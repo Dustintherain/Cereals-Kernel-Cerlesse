@@ -35,16 +35,16 @@ use crate::security::permission::{self, Want};
 use crate::syscall::address_space::UserSpace;
 use crate::time::clock;
 
-/// 单次 `read`/`write` 允许的最大字节数。
-const IO_MAX: u64 = 4096;
-/// 路径长度上限（`open` 的 `len` 参数）。
-const PATH_MAX: u64 = 256;
+/// 单次 `read`/`write` 允许的最大字节数（**定义在 `abi::limits`**）。
+const IO_MAX: u64 = abi::limits::IO_MAX;
+/// 路径长度上限（`open` 的 `len` 参数；**定义在 `abi::limits`**）。
+const PATH_MAX: u64 = abi::limits::PATH_MAX;
 
-/// `-EFAULT`：用户传了不属于自己的地址区间。
+/// `-EFAULT`：用户传了不属于自己的地址区间（**再导出**，定义在 `abi::errno`）。
 ///
 /// v0.9 第五步起对 `syscall` 其它模块可见：目录类 syscall（`dir.rs`）与
 /// 进程类 syscall（`process.rs` 的 `getprocs`）都要做同样的指针校验。
-pub const EFAULT: i64 = -14;
+pub use abi::errno::EFAULT;
 
 /// 校验用户缓冲区间并要求**可读**，转成切片。
 ///
@@ -217,7 +217,8 @@ fn enforce_fd_write(fd: i32) -> i64 {
 /// 用户程序决定（Shell 收到两次就自行退出）。进程模型落地后这里会换成真正的阻塞等待。
 const STDIN_IDLE_TICKS: u64 = 300;
 /// `-EAGAIN`：本次没有整行可用（非阻塞语义的一部分，不是错误）。
-const EAGAIN: i64 = -11;
+/// **定义在 `abi::errno`**。
+use abi::errno::EAGAIN;
 
 /// stdin（fd=0）：从键盘行缓冲取一整行。
 ///

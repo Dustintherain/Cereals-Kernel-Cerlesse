@@ -29,6 +29,8 @@
 
 use core::ptr;
 
+use abi::errno::{EAGAIN, ECHILD, EFAULT, EINVAL, ENOENT, ENOSYS};
+
 use crate::arch::x86_64::{cpu, gdt, paging};
 use crate::driver::serial;
 use crate::fs::vfs;
@@ -39,20 +41,13 @@ use crate::syscall::address_space::{UserSpace, USER_STACK_TOP};
 use crate::syscall::trampoline::{self, RunCtx, UserFrame, NO_PROCESS as NO_PROCESS_U64};
 use crate::time::clock;
 
-/// `wait4` 找不到子进程（与 Linux `ECHILD` 同号）。
-const ECHILD: i64 = -10;
-/// 进程表满 / 无法创建进程（与 Linux `EAGAIN` 同号）。
-const EAGAIN: i64 = -11;
-/// `execve` 路径长度上限。
-const PATH_MAX: u64 = 256;
-/// `getprocs` 的记录尺寸（`libc::PROCINFO_SIZE` 必须与它一致）。
-pub const PROCINFO_SIZE: usize = 40;
-/// `execve` 的 `argv` 项数上限。
-const ARG_MAX: u64 = 8;
-/// 单个 `argv` 参数长度上限。
-const ARG_MAX_LEN: u64 = 256;
-/// `argv` 字符串 + 指针数组占用的用户栈上限（用户栈 16 KiB，这里只占很小一块）。
-pub const ARG_MAX_BYTES: u64 = 1024;
+/// `execve` 路径长度上限（**定义在 `abi::limits`**，与 `open`/`getdents` 同一上限）。
+const PATH_MAX: u64 = abi::limits::PATH_MAX;
+/// `getprocs` 的记录尺寸（**再导出**，定义在 `abi::procinfo`）。
+pub use abi::procinfo::PROCINFO_SIZE;
+/// `execve` 的 `argv` 项数上限 / 单参数上限 / 用户栈占用上限
+/// （**再导出**，定义在 `abi::limits`；用户栈 16 KiB，`argv` 只占一小块）。
+pub use abi::limits::{ARG_MAX, ARG_MAX_BYTES, ARG_MAX_LEN};
 /// `nanosleep` 的最大等待 tick 数；仅作为「PIT 停摆」时的兜底。
 const SLEEP_MAX_SPINS: u64 = 10_000;
 
@@ -122,7 +117,7 @@ pub unsafe fn sys_getpid(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
 pub unsafe fn sys_getprocs(args: &[u64; 5], space: *const UserSpace) -> i64 {
     let (buf_ptr, buf_len) = (args[0], args[1]);
     if (buf_len as usize) < PROCINFO_SIZE {
-        return -22; // -EINVAL
+        return EINVAL;
     }
     let out = match unsafe {
         crate::syscall::file::user_bytes_mut(space, buf_ptr, buf_len, "getprocs")
@@ -171,7 +166,7 @@ pub unsafe fn sys_getprocs(args: &[u64; 5], space: *const UserSpace) -> i64 {
 /// 失败（地址空间复制失败 / 进程表满）返回负 errno，且**不改变进程表**。
 pub unsafe fn sys_fork(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
     let Some(parent) = process::current() else {
-        return -38; // -ENOSYS：内核上下文里没有「进程」可复制
+        return ENOSYS; // 内核上下文里没有「进程」可复制
     };
     let parent_slot = parent.slot;
     let parent_pid = parent.pid;
@@ -180,7 +175,7 @@ pub unsafe fn sys_fork(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
     let parent_cred = parent.cred;
     let child_space = {
         let Some(space) = parent.space.as_ref() else {
-            return -38;
+            return ENOSYS;
         };
         match space.clone_for_fork() {
             Ok(space) => space,
@@ -229,10 +224,10 @@ pub unsafe fn sys_fork(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
 pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
     let slot = process::current_index();
     if slot == NO_PROCESS {
-        return -38; // -ENOSYS：execve 必须由某个进程发起
+        return ENOSYS; // execve 必须由某个进程发起
     }
     let Some(space) = (unsafe { space.as_ref() }) else {
-        return -14; // -EFAULT
+        return EFAULT;
     };
 
     let path_ptr = args[0];
@@ -242,33 +237,33 @@ pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
 
     // 1. 路径：长度 + 区间校验 → UTF-8 → 规范化
     if path_len == 0 || path_len > PATH_MAX {
-        return -22; // -EINVAL
+        return EINVAL;
     }
     if !space.valid_user_range(path_ptr, path_len) {
-        return -14;
+        return EFAULT;
     }
     let raw_path = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, path_len as usize) };
     let Ok(path) = core::str::from_utf8(raw_path) else {
-        return -22;
+        return EINVAL;
     };
     let Ok(path) = vfs::normalize(path) else {
-        return -22;
+        return EINVAL;
     };
 
     // 2. argv：数组本身与每个字符串都必须在用户可读区间内
     if argc > ARG_MAX {
-        return -22;
+        return EINVAL;
     }
     let mut args_list: [&[u8]; ARG_MAX as usize] = [&[]; ARG_MAX as usize];
     if argc > 0 {
         if !space.valid_user_range(argv_ptr, argc * 16) {
-            return -14;
+            return EFAULT;
         }
         for i in 0..argc {
             let pair = (argv_ptr + i * 16) as *const u64;
             let (ptr, len) = unsafe { (ptr::read(pair), ptr::read(pair.add(1))) };
             if len > ARG_MAX_LEN || !space.valid_user_range(ptr, len) {
-                return -14;
+                return EFAULT;
             }
             args_list[i as usize] =
                 unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) };
@@ -302,7 +297,7 @@ pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
         serial::print("user: exec ");
         serial::print(&path);
         serial::println(" -> ENOENT (no such program)");
-        return -2; // -ENOENT
+        return ENOENT;
     };
 
     // 4. 新地址空间：装载 + 构建 argv 用户栈 + 新帧
@@ -533,7 +528,7 @@ unsafe fn run_child(slot: usize) -> i64 {
         child.state = ProcState::Running;
         let Some(space) = child.space.as_ref() else {
             serial::println("user: wait FAIL (child has no address space)");
-            return -38;
+            return ENOSYS;
         };
         (
             &child.frame as *const UserFrame,

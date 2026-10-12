@@ -27,7 +27,7 @@ KERNEL_ELF := target/x86_64-unknown-none/debug/kernel
 USERLAND        := userland
 USERLAND_IMAGES := $(BUILD)/userland/images
 
-.PHONY: help build boot kernel kernel-nouserland image image-kernel image-exception image-pagefault fat-image storage-images run test test-kernel-only test-exception test-memory test-pagefault test-keyboard test-shell test-proc test-programs test-dyn dyn-hostcheck test-scheduler test-ipc test-fs test-user test-ckm test-ckm-store test-driver test-fat test-storage-fixtures test-storage test-storage-mbr test-network test-all user userland-images test-pkg test-ckc test-cpm go-test test-orch check-boundary check clean
+.PHONY: help build boot kernel kernel-nouserland image image-kernel image-exception image-pagefault fat-image storage-images run test test-kernel-only test-exception test-memory test-pagefault test-keyboard test-shell test-proc test-programs test-dyn dyn-hostcheck test-scheduler test-ipc test-fs test-user test-ckm test-ckm-store test-driver test-fat test-storage-fixtures test-storage test-storage-mbr test-network test-all user userland-images test-pkg test-all-with-userland abi-check go-test test-orch test-orch-userland check-boundary check clean
 
 help:
 	@echo "targets:"
@@ -62,14 +62,15 @@ help:
 	@echo "  image-kernel - kernel-only disk image (no userland images embedded)"
 	@echo "  test-kernel-only - pure-kernel acceptance: boot + self-tests + diagnostic idle loop without userland"
 	@echo "  check-boundary - assert the kernel does not depend on userland (tools/check-boundary.py)"
-	@echo "  check   - host-side gate: check-boundary + go-test"
-	@echo "  test-pkg - H-06: assert the .ckc container (P0a) + the cpm transaction engine (P0b / CKM-3), host-side"
-	@echo "  test-ckc - H-06 P0a: .ckc container format + packaging rules (host-side)"
-	@echo "  test-cpm - H-06 P0b = CKM-3: add/rollback/recover/gc transaction engine (host-side)"
+	@echo "  abi-check - phase 3: assert the syscall ABI has a single source of truth (abi crate, host-side)"
+	@echo "  check   - host-side gate: abi-check + check-boundary + go-test"
+	@echo "  test-pkg - H-06: 转发到 userland/pkgmgr 的包管理器验收（.ckc 容器 + cpm 事务引擎，主机侧）"
+	@echo "  test-all-with-userland - 内核 test-all + 用户态集成测试（需要 userland/ 或 CERLESSE_USERLAND_DIR）"
+	@echo "  test-orch-userland - 用户态集成场景并行编排（tests/orchestrate.json 里 tags 含 userland 的 6 个场景）"
 	@echo "  test-all - run every integration test"
 
 	@echo "  go-test  - v0.4 H-04/H-05: Go unit tests for tools-go (host side)"
-	@echo "  test-orch - v0.4 H-04: run all 19 scenarios in parallel via Go orchestrator"
+	@echo "  test-orch - v0.4 H-04: 内核场景并行编排（tests/orchestrate.json 里 tags 不含 userland 的 13 个场景）"
 	@echo "  clean  - remove build artifacts"
 
 build: image
@@ -171,7 +172,11 @@ test-pagefault: image-pagefault
 
 # 全量回归：先跑主机侧边界门禁（内核不得依赖用户态），再跑全部 QEMU 场景 ——
 # 包含 test-kernel-only（没有用户态镜像时内核照样启动 + 进入可诊断状态）。
-test-all: check-boundary test test-kernel-only test-exception test-memory test-pagefault test-keyboard test-shell test-proc test-programs test-dyn test-scheduler test-ipc test-fs test-user test-ckm test-driver test-fat test-storage-fixtures test-storage test-storage-mbr test-network
+test-all: abi-check check-boundary test test-kernel-only test-exception test-memory test-pagefault test-keyboard test-scheduler test-ipc test-fs test-ckm-store test-driver test-fat test-storage-fixtures test-storage test-storage-mbr test-network
+
+# 交叉仓库：内核 test-all + 用户态集成测试（需要 userland/ 或 CERLESSE_USERLAND_DIR）。
+# 这些目标断言 `/init`/`/bin/*`/`libc` 的输出，因此**不属于内核 test-all**（见 docs/pure-kernel.md 阶段五）。
+test-all-with-userland: userland-images test-all test-user test-shell test-proc test-programs test-dyn dyn-hostcheck test-ckm test-pkg
 
 # v0.5 验收：≥3 个内核任务在 PIT 时间片驱动下轮转（Round Robin）
 test-scheduler: image
@@ -954,7 +959,8 @@ dyn-hostcheck:
 
 # 用户态（独立 workspace，见 userland/）：构建程序 + 动态链接夹具，产出
 # $(USERLAND_IMAGES)/manifest.txt。**不需要内核源码**，也不启动 QEMU；
-# 段布局校验（tools/check_user_elf.py）在那边对每个程序跑。
+# 段布局校验（userland/tools/check_user_elf.py）在那边对每个程序跑 —— 用户态的构建
+# 因此**不需要内核仓库的任何工具**（阶段五：两侧分别构建）。
 userland-images:
 	@if [ -d $(USERLAND) ]; then \
 		$(MAKE) -C $(USERLAND) images; \
@@ -965,31 +971,26 @@ userland-images:
 # 兼容 v0.9 的旧名字（当时 `make user` 在内核 workspace 里构建用户程序）。
 user: userland-images
 
-# H-06 包管理器验收（**主机侧、不启 QEMU、纯标准库**）：两份套件，对应 P0a 与 P0b。
+# H-06 包管理器验收（**主机侧、不启 QEMU、纯标准库**）—— **已随阶段五迁到用户态**。
 #
-#   1. `test-ckc`（P0a，`tools/pkgmgr/ckc.py`）—— 容器与打包规则本身：
-#      - 确定性：同一目录树两次打包逐字节相同、rev 相同；
-#      - 头部逐字段：magic/版本/头长/flags/payload_off/payload_len/保留位，改任一处 → 退出码 2；
-#      - 内容哈希：翻 payload 一个字节 → 退出码 2；
-#      - ustar 结构：条目未排序 / PKG.toml 不在第一 / 非零 mtime / 非零补零 / 符号链接 → 2；
-#      - 打包期规则：超长路径（ENAMETOOLONG）/目标越出 scope/setuid/重复 target/hooks/… → 1；
-#      - 独立复核：系统 `tar` 读同一段 payload，条目与内容必须与 ckc.py 一致（不是自己验自己）。
-#   2. `test-cpm`（**P0b = CKM-3 事务引擎**，`tools/pkgmgr/cpm.py`）—— 事务/回执/回滚/恢复：
-#      - 成功路径：落地文件逐字节等于包内内容、回执 rev = `.ckc` payload 哈希、`verify` 通过；
-#      - 幂等：重复 `add`/`apply` 命中 `already active` ⇒ 零写入（`st_mtime_ns` 断言）；
-#      - 原子失败：`add --fail-after activate` ⇒ 退出码 3，文件逐字节回到事务前且无半成品回执；
-#      - 掉电与恢复：`--crash-after activate` 硬退出 9 留下未提交事务 ⇒ `cpm recover` 回滚（含陈旧锁接管）；
-#      - 回退：`rollback --offline` 回到上一修订（纯本地）；
-#      - 篡改检出与自愈：`verify` 退出码 2，同修订重装通过且修订历史不被挤掉；
-#      - 安装期重新校验：手工拼的「容器合法但 target 越出 scope」的包被拒且**零文件写入**；
-#      - 去重 / 并发锁（写命令 5、读者不受影响）/ 卸载保留配置 / 退出码档位。
-test-pkg: test-ckc test-cpm
+# `ckc.py`（P0a 容器与打包规则）与 `cpm.py`（P0b = CKM-3 事务引擎）连同两份套件
+# 现在住在 `userland/pkgmgr/`（`make -C userland test-pkg`）：安装 / 卸载 / 依赖 / 事务
+# 属于用户态管理服务，内核只保留 `.ckc` 的**格式规范**（docs/package-manager.md）
+# 与安装期的重新校验（`cpm` 用 `ckc.manifest_from_data`，内核不认识包）。
+#
+# 因此这里是**交叉仓库转发**：`CERLESSE_USERLAND_DIR` 指向的目录不存在时**明确报错**，
+# 而不是静默跳过 —— 与 `image-userland` / `test-all-with-userland` 同一约定。
+CERLESSE_USERLAND_DIR ?= $(USERLAND)
 
-test-ckc:
-	$(PYTHON) tests/test_ckc.py
-
-test-cpm:
-	$(PYTHON) tests/test_cpm.py
+test-pkg:
+	@if [ -d "$(CERLESSE_USERLAND_DIR)" ]; then \
+		$(MAKE) -C $(CERLESSE_USERLAND_DIR) test-pkg; \
+	else \
+		echo "test-pkg: 找不到用户态目录 '$(CERLESSE_USERLAND_DIR)'。"; \
+		echo "          包管理器（.ckc + cpm）自阶段五起住在 userland/pkgmgr/。"; \
+		echo "          请设置 CERLESSE_USERLAND_DIR=<path>，或改用内核侧的 make test-all。"; \
+		exit 1; \
+	fi
 
 # 边界门禁（docs/pure-kernel.md 阶段二）：内核不得依赖用户态 ——
 # 不得嵌套调用 cargo/as/ld、不得内嵌用户态字节、不得依赖用户态包。
@@ -997,17 +998,33 @@ check-boundary:
 	$(PYTHON) tools/check-boundary.py
 	$(PYTHON) tools/check-boundary.py --selftest
 
-check: check-boundary go-test
+# 阶段三（ABI 单一事实源，docs/pure-kernel.md）：`abi` crate 的宿主自测 ——
+# 号唯一/号段不重叠/记录尺寸自洽/CKM 与存储字面量逐条固化。
+# 另有编译期断言（abi/src/record.rs）：任何一侧把数字改坏，**构建**就失败。
+abi-check:
+	$(CARGO) test -p abi
+
+# 主机侧门禁：ABI 单一事实源 + 边界 + Go 单元测试
+check: abi-check check-boundary go-test
 
 # v0.4 H-04/H-05 主机侧：Go 单元测试（串口分析 + 并行编排器）
 go-test:
 	cd tools-go && $(GO) vet ./... && $(GO) test ./...
 
-# v0.4 H-04 验收：Go 编排器并行跑全部 19 个集成测试场景 + 串口日志二次复核。
+# v0.4 H-04 验收：Go 编排器并行跑内核组 13 个集成测试场景（`-exclude-tag userland`）+ 串口日志二次复核。
 # 磁盘镜像先构建（默认/异常注入/页错误 + FAT 测试盘），随后场景并行执行；
 # 每个场景独占 OVMF_VARS 副本、串口日志与 monitor socket（见 tests/orchestrate.json）。
+# 内核场景并行编排：`-exclude-tag userland` 把断言 `/init`、`/bin/*`、`libc` 输出的
+# 场景（user/ckm/shell/proc/programs/dyn）挡在外面，因此在纯内核 checkout 里也能全绿。
+# 标签定义在 `tests/orchestrate.json` 的场景 `tags` 里（词表见 tools-go 的 KnownTags）。
 test-orch: image image-exception image-pagefault fat-image storage-images
-	cd tools-go && $(GO) run ./cmd/testorch -config ../tests/orchestrate.json -root ..
+	cd tools-go && $(GO) run ./cmd/testorch -config ../tests/orchestrate.json -root .. -exclude-tag userland
+
+# 交叉仓库：用户态集成场景（`user`/`ckm`/`shell`/`proc`/`programs`/`dyn`）并行编排。
+# 它需要完整镜像（内嵌用户态）与内核侧的 QEMU 驱动，因此留在内核仓库里跑，
+# 但**不属于内核 `test-all`**（阶段五要的就是这条边界）。
+test-orch-userland: image image-exception image-pagefault fat-image storage-images
+	cd tools-go && $(GO) run ./cmd/testorch -config ../tests/orchestrate.json -root .. -tag userland
 
 clean:
 	rm -rf $(BUILD)

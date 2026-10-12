@@ -5,3 +5,6 @@ edition = "2021"
 description = "Cerlesse 最小用户态运行时（v0.6 脚手架）：syscall 封装 + 启动代码 + 控制台输出"
 
 [dependencies]
+# 系统调用 ABI 的单一事实源（阶段三）：与内核引用**同一份**调用号 / errno /
+# 记录布局定义，不再靠“必须与内核一致”的注释维持。
+abi = { path = "../../abi" }

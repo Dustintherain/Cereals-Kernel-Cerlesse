@@ -14,6 +14,9 @@ Cerlesse/
 ├── shared/                      # boot/kernel 共享数据结构（v0.1 ✅）
 │   └── src/lib.rs               # shared::BootInfo、BOOT_MAGIC
 │
+├── abi/                         # ✅ 纯内核化阶段三：系统调用 ABI 单一事实源
+│   └── src/                     # syscall / errno / flags / limits / dirent / procinfo / volume / ckm / record
+│
 ├── boot/                        # Bootloader crate（v0.1 ✅）
 │   ├── src/                     # main.rs（UEFI 入口+ELF 装载）、serial.rs、uefi.rs
 │   └── Cargo.toml
@@ -48,9 +51,10 @@ Cerlesse/
 ├── userland/                    # ✅ 纯内核化：**用户态独立 workspace**（自 2026-10-11 起，见 pure-kernel.md）
 │   ├── Cargo.toml               # workspace：libc + user/*；含 user-release profile
 │   ├── .cargo/config.toml       # code-model=large + relocation-model=static（**只对用户态**）
-│   ├── Makefile                 # images / check / dyn / dyn-hostcheck → build/userland/images/manifest.txt
+│   ├── Makefile                 # images / check / dyn / dyn-hostcheck / test-pkg / test-all → build/userland/images/*
 │   ├── libc/                    # ✅ 最小用户态运行时（syscall 封装 / _start / print! / heap / args）
-│   ├── tools/check_dyn_fixture.py  # ✅ 动态链接夹具结构自检（ET_DYN + PT_INTERP + DT_NEEDED）
+│   ├── pkgmgr/                  # ✅ 阶段五迁入：ckc.py（H-06 P0a 容器）+ cpm.py（P0b 事务引擎）+ tests/
+│   ├── tools/                   # ✅ 用户态侧校验脚本：check_dyn_fixture.py、check_user_elf.py（阶段五迁入）
 │   └── user/
 │       ├── hello/               # ✅ Ring3 用户程序 → RAMFS /init（libc + user.ld + build.rs）
 │       ├── shell/               # ✅ 交互式 Shell → /bin/sh（fork/execve/wait4 跑外部命令）
@@ -59,21 +63,20 @@ Cerlesse/
 │       ├── dynhello/            # ✅ 汇编夹具（as+ld 现编）→ /bin/dynhello + /lib/{ld.so,libgreet.so}
 │       └── init/                # v0.9 占位（内核实际跑的 /init 是 user/hello 的产物）
 │
-├── tools/                       # 主机侧工具
+├── tools/                       # 主机侧工具（阶段五后：只留内核/镜像侧工具）
 │   ├── image-builder/           # Python：磁盘镜像组装
 │   ├── check-boundary.py        # ✅ 纯内核化：内核/用户态边界门禁（6 项 + --selftest）
-│   ├── check_user_elf.py        # ✅ v0.7：用户程序 ELF 段布局检查（现由 userland/Makefile 调用）
-│   ├── mkfs/                    # ✅ v0.8：FAT12/16/32 镜像生成（mkfs.py，mtools 独立复核）
-│   └── pkgmgr/                  # ✅ H-06 P0a：CKC 包容器（ckc.py，后缀 .ckc；tar 独立复核）
+│   └── mkfs/                    # ✅ v0.8：FAT12/16/32 镜像生成（mkfs.py，mtools 独立复核）
+│                                #    （check_user_elf.py 与 pkgmgr/ 已随阶段五迁入 userland/）
 │
 ├── tools-go/                    # Go：测试编排 / 串口日志分析等主机服务
 │
-├── tests/                       # 集成测试（Python 驱动 QEMU）
+├── tests/                       # 集成测试（Python 驱动 QEMU；**只包含内核场景** —— 用户态集成场景在 orchestrate.json 里标 `tags: [userland]`，由 test-orch-userland 跑）
 │   └── fatroot/                 # ✅ v0.8：FAT 测试盘的内容（data/）与复核说明
 │
 ├── docs/                        # 全部开发文档（见 docs/README.md）
 │
-├── Cargo.toml                   # Cargo Workspace（**只有 shared/boot/kernel**；exclude userland）
+├── Cargo.toml                   # Cargo Workspace（**只有 shared/boot/abi/kernel**；exclude userland）
 ├── Makefile                     # 构建/QEMU/测试入口（v0.1 ✅）
 ├── DEVELOPMENT.md               # 主开发文档
 └── README.md
@@ -84,6 +87,7 @@ Cerlesse/
 | 目录 | 职责 | 计划版本 |
 | ---- | ---- | ---- |
 | `shared/` | BootInfo 等跨 boot/kernel 纯数据结构 | v0.1 ✅ |
+| `abi/` | **系统调用 ABI 单一事实源**（纯内核化阶段三 ✅）：调用号/`SYS_MAX`/号段规则、errno、`O_*`/`PROT_*`/`MAP_*`/fd 编号、参数上限（`PATH_MAX`/`IO_MAX`/`ARG_*`）、`dirent`/`procinfo`/`volume`/`ckm` 记录布局与能力位/op 编号、编译期断言；内核与 `userland/libc` 都引用它（`make abi-check`） | 纯内核化 ✅ |
 | `boot/` | UEFI 引导、内存检测、装载内核、传递 BootInfo | v0.1 ✅ |
 | `kernel/src/arch/x86_64/` | GDT、IDT、控制寄存器（`cpu.rs`）、页表操作（`paging.rs`）、上下文切换 | v0.1–v0.3 ✅ |
 | `kernel/src/memory/` | 物理帧分配、虚拟内存映射、内核堆、全局分配器 | v0.3 ✅ |
@@ -101,10 +105,10 @@ Cerlesse/
 | `kernel/src/ipc/` | 管道、通道、共享内存 | v0.5+ |
 | `kernel/src/network/` | 以太网 → IP → TCP/UDP → Socket | v0.9 |
 | `kernel/src/security/` | 权限、凭证（uid/gid）、文件 mode 判定；**能力位与 CKM 判定点见 `kernel/src/ckm/`**（规划） | v1.0 |
-| `userland/` | **用户态独立 workspace**（不属于内核）：`libc/`（运行时）+ `user/*`（程序）+ `Makefile`（构建 + ELF 校验 + `manifest.txt`）+ `.cargo/config.toml`（large 代码模型只对用户态生效）；与内核的唯一接触面是 `build/userland/images/` | 纯内核化 ✅ |
+| `userland/` | **用户态独立 workspace**（不属于内核）：`libc/`（运行时）+ `user/*`（程序）+ `Makefile`（构建 + ELF 校验 + `manifest.txt`）+ `.cargo/config.toml`（large 代码模型只对用户态生效）；含 `pkgmgr/`（包管理器主机工具，阶段五迁入）与 `tools/`（`check_dyn_fixture.py`、`check_user_elf.py`）；与内核的唯一接触面是 `build/userland/images/` | 纯内核化 ✅ |
 | `userland/libc/` | 最小用户态运行时：syscall 封装（含 `open/read/close`、`brk/mmap/munmap` 与 `fork/execve/wait4`）、`_start`（入口寄存器 `argc`/`argv`）、`print!/println!`、panic handler、`heap`（`#[global_allocator]`）、`args` | v0.6 ✅ / v0.7 ✅ / v0.9 ✅ |
 | `userland/user/` | 用户程序（`hello` ✅ v0.6/v0.7 → `/init`；`shell` ✅ v0.9 → `/bin/sh`；`hello-bin` ✅ v0.9 第三步 → `/bin/hello`（外部程序）；**`ls` / `cat` / `echo` / `ps` ✅ v0.9 第五步 → `/bin/*`**；**`dynhello/` ✅ v0.9 第六步 —— 不是 Rust crate，而是 `as`+`ld` 现编的动态链接夹具 → `/bin/dynhello` + `/lib/{ld.so,libgreet.so}`**；`init/` 仍为占位） | v0.6–v0.9 |
-| `tools/`（Python） | 镜像构建、**`check-boundary.py`（内核/用户态边界门禁，纯内核化 ✅）**、用户程序 ELF 检查（v0.7，现由 userland/Makefile 调用）、`mkfs/` FAT 镜像生成（v0.8 ✅）、**`pkgmgr/ckc.py`（CKC 包容器 `.ckc`，H-06 P0a ✅）** | v0.1 起 |
+| `tools/`（Python） | 镜像构建、**`check-boundary.py`（内核/用户态边界门禁，纯内核化 ✅）**、`mkfs/` FAT 镜像生成（v0.8 ✅）；归属用户态的 `check_user_elf.py` 与 `pkgmgr/` 已于**阶段五**迁入 `userland/` | v0.1 起 / 阶段五 ✅ |
 | `tools-go/`（Go） | 测试编排、串口日志服务 | v0.4 起 |
 | `tests/` | QEMU 集成测试 | v0.1 起 |
 
@@ -184,13 +188,14 @@ Cerlesse-Kernel-Cerlesse/（内核）      userland/（用户态独立 workspace
 `kernel/src/syscall/user.rs`、`kernel/src/fs/mod.rs`）；`kernel/src/{arch,memory,interrupt,
 time,process,scheduler,fs,driver,network,ipc,security}`、`boot/`、`shared/` 未动。
 目标结构里 `kernel/src/` 仍沿用现有模块划分，不新增 `boot/`、`block/`、`sync/`、`lib/` 等目录（非目标）。
-`abi/`（syscall ABI 单一事实源，阶段三）与 `tests/orchestrate-kernel.json`（阶段五剩余项）
-**尚未创建**。
+`abi/`（syscall ABI 单一事实源）**已于阶段三创建**（`make abi-check`；目标结构里的
+`abi/` 就是它）；`tests/orchestrate-kernel.json` 的物理拆分**未采用** —— 阶段五改用 `tests/orchestrate.json` 的 `tags` 分组（内核侧 `-exclude-tag userland` 的 13 场景 / 用户态侧 `-tag userland` 的 6 场景），见 [pure-kernel.md](./pure-kernel.md) 8.3。
 
 ## 5. 修订记录
 
 | 日期 | 变更 |
 | ---- | ---- |
+| 2026-10-12 | **纯内核化阶段三：`abi/` 单一事实源** —— 目录树新增 `abi/`（`syscall`/`errno`/`flags`/`limits`/`dirent`/`procinfo`/`volume`/`ckm`/`record`），根 `Cargo.toml` 变为 `shared/boot/abi/kernel`，模块表新增 `abi/` 行；第 4 节由「`abi/` 尚未创建」改为「已落地」；内核 18 文件与 libc 45 常量改为引用它（`make abi-check`） |
 | 2026-10-12 | **CKM-2**：`kernel/src/ckm/` 新增 `overlay.rs`（覆盖层注册表）与 `store.rs`（状态区）；3.1 节由「尚未创建」改为「已落地/待建」；`tools/image-builder/build_image.py` 的镜像布局（FAT 63 MiB + 状态区 1 MiB）与新增 `tests/test_ckm_store.py` |
 | 2026-10-11 | v1.0 之后规划：新增第 3.2 节（**CSS 存储管理**预计新开/扩展的目录：`kernel/src/storage/`、`syscall/storage.rs`、`fs/{exfat,ext2,ext4,ntfs,iso9660}/`、libc 路径模块、`ckm storage`、`mkfs` 分区表生成 —— 均未创建，进入 CSS-1…CSS-6 时回填） |
 | 2026-10-11 | 纯内核化**执行阶段二/四/五（部分）**：`libc/`(7) 与 `user/`(33) 移入 `userland/` 独立 workspace（目录树重写为本节的 userland/ 子树，含 `Cargo.toml`/`.cargo/config.toml`/`Makefile`/`tools/check_dyn_fixture.py`）；`kernel/build.rs` 改为「按 `manifest.txt` 内嵌」（不再构建用户程序）；新增 `tools/check-boundary.py`；根 `Cargo.toml` 收敛为 `shared/boot/kernel` + `exclude userland`；第 4 节由「规划」改为「已执行大部分」（实测：无 userland 的 checkout 仍能 `make image` + `make test-kernel-only`） |
@@ -208,6 +213,7 @@ time,process,scheduler,fs,driver,network,ipc,security}`、`boot/`、`shared/` �
 | 2026-10-11 | v0.6 用户态脚手架落地：`libc/` 与 `user/hello` 从占位变为实现并加入 workspace；`kernel/build.rs` 新增构建期用户程序构建与 ELF 摊平；workspace 新增 `user-release` profile 与 `default-members` |
 | 2026-10-11 | v0.7 落地：`kernel/src/fs/` 从占位变为实现（`vfs`/`inode`/`mount`/`ramfs`/`file`），`kernel/src/syscall/` 新增 `elf.rs` 与文件 syscall；`kernel/build.rs` 由「摊平内嵌」改为「校验 ELF 后原样内嵌」（RAMFS `/init`）；新增 `tools/check_user_elf.py`（`make user` 验段布局） |
 | 2026-10-11 | v0.8 前半落地：`kernel/src/driver/` 新增 `pci.rs` / `driver.rs` / `block.rs` / `virtio_blk.rs`（模块表里补上分层职责），`kernel/src/arch/x86_64/port.rs`（端口 I/O），`memory/frame.rs` 追加连续帧分配；`user/{init,shell,ls,...}` 仍为占位 |
-| 2026-10-11 | H-06 P0a：`tools/` 新增 `pkgmgr/ckc.py`（CKC 包容器，后缀 `.ckc`）；目录树与模块表同步标注 |
+| 2026-10-12 | **阶段五：构建与测试按责任拆分** —— `tools/pkgmgr/`（`ckc.py`+`cpm.py`）与 `tests/test_{ckc,cpm}.py` → `userland/pkgmgr/`，`tools/check_user_elf.py` → `userland/tools/`；`tests/orchestrate.json` 用 `tags` 分组 + `testorch -tag`/`-exclude-tag`；内核 `make test-all` 收敛为纯内核（18 目标），新增 `test-all-with-userland`/`test-orch-userland`，用户态侧 `make -C userland test-all`；目录树与模块表同步标注 |
+| 2026-10-11 | H-06 P0a：`tools/` 新增 `pkgmgr/ckc.py`（CKC 包容器，后缀 `.ckc`；**阶段五迁至 `userland/pkgmgr/`**）；目录树与模块表同步标注 |
 | 2026-10-11 | v0.9 第一步：`kernel/src/syscall/` 新增 `memory.rs`（用户堆 syscall），`libc/` 新增 `heap.rs`（`#[global_allocator]`）；目录树与模块表同步标注 |
 | 2026-10-11 | v0.8 收官：`kernel/src/fs/` 新增 `fat.rs`（块设备上的 FAT 只读后端，模块表补一行）；`tools/mkfs/` 从占位变为实现（`mkfs.py`）；`tests/fatroot/`（测试盘内容 + mtools 复核说明）；`tests/test_boot.py` 支持 `--disk2`（双盘启动） |

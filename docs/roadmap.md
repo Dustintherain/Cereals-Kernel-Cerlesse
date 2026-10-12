@@ -118,7 +118,8 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
    用户/组/权限、完整启动链、发布准备仍待做。
 9. **第九阶段（v1.0 之后，规划）**：桌面环境兼容 —— 内核侧地基与接口对齐（D0–D5），见 [desktop.md](desktop.md)。
 10. **第十阶段（v0.9 之后，进行中；执行上排在第九阶段之前）**：纯内核化边界收敛 —— 内核只提供机制，
-    用户态已拆到独立 workspace `userland/`（阶段二/四 ✅、阶段五 🟡；阶段一/三/六 未做），
+    用户态已拆到独立 workspace `userland/`（阶段二/三/四 ✅、阶段五 🟡；阶段一/六 未做）；
+    调用号/errno/记录布局自阶段三起只有一处定义（`abi/`，`make abi-check`），
     见 [pure-kernel.md](pure-kernel.md)（含第 8 节执行记录）。
 11. **第十一阶段（v1.0 之后，进行中）**：CKM 内核级权限控制与扩展管理 —— CKM Core（内核）/
     CKM Service（`ckmd`）/ CKM Manager（`ckm`）/ 覆盖层 / 恢复环境，分 CKM-1…CKM-7；
@@ -177,4 +178,5 @@ Kernel 基础层（GDT / IDT / Exception / Panic）
 | 2026-10-11 | **新增「桌面环境兼容路线」（v1.0 之后，规划）**：新建 docs/desktop.md —— 现状审计（显示/输入/ioctl/设备模型/`/proc`/futex/音频/ACPI 等逐项有据）、用户态与内核侧归属纠正（logind/D-Bus/PipeWire 是用户态，KVM 与桌面前置无关）、被遗漏的地基清单、D0–D5 分层与 QEMU 可断言验收（monitor `sendkey`/`screendump` 实测可用）、里程碑 v1.1–v1.6；同步 roadmap（第九阶段 + 「禁止提前做」项修正）、DEVELOPMENT（5.10）、architecture 第 5 节、project-structure（规划新增目录）与 README |
 | 2026-10-11 | **CSS 提案评审补边界**：[storage.md](storage.md) 增 6.8「文件系统后端装载政策」（第一版全部编译内置、不经 CKM 运行时装卸）、6.1「覆盖层/回滚/恢复归 CKM」、6.7「兼容性完整展示」、第 11 节「不做写回修复」（`fsck` 只读检查）；第十二阶段段落同步 |
 | 2026-10-11 | **CSS-1 落地**：`kernel/src/storage/`（GPT 主/备表头 + CRC32、MBR + EBR 链只读扫描，无分区表退化为整盘一卷，FAT 探测）、块设备注册表 2 → 8、`storage_volumes`(261)/`storage_rescan`(265)（64 字节定长卷记录、确定性枚举）、`mkfs.py` 的 GPT/MBR/主表受损/无表四类夹具、`libc` 解析器 + 用户程序 `/bin/volumes`、`make storage-images`/`test-storage-fixtures`/`test-storage`/`test-storage-mbr` 与编排场景 `storage`/`storage-mbr`（15 → **17 场景**）、内核解析自测 11 例 / 45 断言；第十二阶段由「规划」改「进行中」；同步 [storage.md](storage.md) 第 2/9/10 节、docs/README.md、DEVELOPMENT.md 5.13 |
+| 2026-10-12 | **纯内核化阶段三落地（ABI 单一事实源）**：新增 `abi/` crate（调用号/`SYS_MAX`/号段规则、errno、`O_*`/`PROT_*`/`MAP_*`/fd、`PATH_MAX`/`IO_MAX`/`ARG_*`、`dirent`/`procinfo`/`volume`/`ckm` 记录布局与能力位/op 编号 + 编译期断言）；内核 18 个文件与 libc 45 个常量改为引用它（对外名字与类型不变、行为零变化），新增 `make abi-check` 并并入 `make check`；第十阶段由「阶段二/四 ✅」更新为「阶段二/三/四 ✅」；详见 [pure-kernel.md](pure-kernel.md) 8.2 |
 | 2026-10-12 | **CSS-3（盘符）大部分落地**：盘符表 `kernel/src/storage/letters.rs`（固定容量：缺省 `C` 给系统卷、其余按枚举顺序给 `D`/`E`/…；自定义映射持久化到 CKM 状态区键 `storage/letters`，`letter = 0` 取消回到规则）、`storage/registry.rs` 的 `letter_of`/`slot_of`/`assign_letter`（盘符写入卷记录偏移 24）、`syscall/storage.rs` 把 262 `storage_mount`/263 `storage_unmount`/264 `storage_assign_letter` 从 ENOSYS 桩上拿下（判定点 8 `CAP_STORAGE_ADMIN`）、`fs::mount_volume_by_id`/`fs::unmount_point`、`userland/libc/src/path.rs`（`C:\` → POSIX，查卷表不硬编码字母）+ 三个 syscall 包装、`/bin/volumes` 的 `list`/`mount`/`unmount`/`letter`/`demo` 子命令；`make test-storage`（`letter=` + `letters selftest checks=36`）/`test-storage-mbr`（`checks=22`）/`test-programs`（`volumes demo` 双入口）/`test-ckm`（零能力拒绝）/`test-ckm-store`（`storage/letters` 跨重启）全 PASS；第十二阶段与 [storage.md](storage.md) 第 2/4/6/9/10/13 节同步 |

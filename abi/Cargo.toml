@@ -1,0 +1,18 @@
+# Cerlesse 系统调用 ABI —— **单一事实源**（`docs/pure-kernel.md` 阶段三 / `docs/syscall.md`）
+#
+# 为什么单独一个 crate：v1.0 之前系统调用号、errno、记录布局在内核与 libc 里
+# **各写一份**（编号表、errno 字面量、DIRENT_SIZE/PROCINFO_SIZE 之类的“必须与
+# 对方一致”注释），漂移的症状是运行期的怪异返回值。放在这里之后，两侧都只能
+# 引用同一处定义（内核 `kernel/src/syscall/*`、用户态 `userland/libc/src/syscall.rs`）。
+#
+# 约束（`tools/check-boundary.py` 的 K4 允许内核依赖它）：
+#   - `no_std`、**零依赖**、`forbid(unsafe_code)`、无分配 —— 它要同时被
+#     `x86_64-unknown-none`（内核与用户程序）和**宿主**（`cargo test -p abi`）编译；
+#   - 只放常量与 `const fn`，不放任何逻辑/状态（阶段六才考虑独立发布）。
+[package]
+name = "abi"
+version = "0.1.0"
+edition = "2021"
+description = "Cerlesse 系统调用 ABI：调用号、errno、标志位、记录布局的单一事实源"
+
+[dependencies]

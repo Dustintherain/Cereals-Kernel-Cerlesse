@@ -95,7 +95,7 @@ root@cerlesse C:>
 ```
 
 - **一条命令进入可用系统**：`make run` 构建引导器 + 内核 + 磁盘镜像并启动 QEMU，串口就是控制台。
-- **每一层都有可复现的验收入口**：`make test-all` 跑 20 个集成测试目标加边界门禁，覆盖引导 / 异常 / 内存 / 中断 / 调度 / IPC / 文件系统 / 存储（分区/卷/多挂载点/卸载） / 驱动 / 网络 / 用户态；`make test-orch` 再用 Go 编排器并行跑 17 个场景并二次复核串口日志。
+- **每一层都有可复现的验收入口**：`make test-all` 跑全部集成测试目标加 ABI 门禁（`make abi-check`）与边界门禁，覆盖引导 / 异常 / 内存 / 中断 / 调度 / IPC / 文件系统 / 存储（分区/卷/多挂载点/卸载） / 驱动 / 网络 / 用户态；`make test-orch` 再用 Go 编排器并行跑 17 个场景并二次复核串口日志。
 - **机制与功能分层，而且边界有门禁**：内核只提供机制，Shell、`init`、`libc`、coreutils 位于独立 workspace [`userland/`](userland/README.md)。把 `userland/` 整个移出 checkout，`make image-kernel` 仍能产出可启动镜像（`make test-kernel-only` 通过），`make check-boundary` 会挡住把依赖加回来的提交。
 - **可读的设计与踩坑记录**：每个子系统一份规格文档（含「为什么这样做」和真实故障复盘），入口见 [文档索引](docs/README.md)。
 
@@ -117,8 +117,8 @@ root@cerlesse C:>
 | `make test-driver` / `make test-network` | PCI 枚举 + virtio-blk / virtio-net + ARP + DHCP |
 | `make test-dyn` / `make dyn-hostcheck` | 内核侧最小动态链接 / 同一批夹具交给宿主机 glibc `ld.so` 复核 |
 | `make test-storage` / `make test-storage-mbr` | GPT / MBR 分区镜像的卷枚举（`storage_volumes`）+ VFS 收口（卷身份上挂载点、多挂载点、卸载）+ 主机侧夹具复核 |
-| `make check` / `make check-boundary` | 主机侧门禁（边界 + Go 单测）/ 内核不得依赖用户态 |
-| `make test-orch` / `make test-pkg` | 19 个场景并行编排 / 包管理器（主机侧，不启 QEMU）：`.ckc` 容器（`test-ckc` 37 项）+ **事务引擎 `cpm`（`test-cpm` 63 项）** |
+| `make check` / `make abi-check` / `make check-boundary` | 主机侧门禁（**ABI 单一事实源** + 边界 + Go 单测）/ `abi` crate 自测（号/号段/记录尺寸/能力位）/ 内核不得依赖用户态 |
+| `make test-orch` / `make test-pkg` | 内核组 13 个场景并行编排（`testorch -exclude-tag userland`；用户态组用 `make test-orch-userland`）/ 包管理器（主机侧，不启 QEMU）：`.ckc` 容器（`test-ckc` 37 项）+ **事务引擎 `cpm`（`test-cpm` 63 项）** |
 
 其余目标（`image-kernel`、`userland-images`、`fat-image`、`go-test` 等）及其输出含义见 [DEVELOPMENT.md](DEVELOPMENT.md) 与 [docs/api.md](docs/api.md)。
 
@@ -126,12 +126,15 @@ root@cerlesse C:>
 
 ```text
 boot/      UEFI 引导              kernel/    Rust 内核（内存/中断/调度/syscall/fs/驱动/进程）
-shared/    引导与内核共享结构      userland/  用户态独立 workspace（libc + Shell + 用户程序）
+shared/    引导与内核共享结构      abi/       系统调用 ABI 单一事实源（内核与用户态引用同一处）
+userland/  用户态独立 workspace（libc + Shell + 用户程序）
 tools/     Python 主机工具        tools-go/  Go 侧并行编排与串口日志分析
 tests/     QEMU 集成测试与编排    docs/      开发文档（每个子系统一份规格）    assets/  README 视觉资产
 ```
 
-内核只提供机制，用户态提供功能。完整目录树与模块职责见 [docs/project-structure.md](docs/project-structure.md)，内核/用户态划分与迁移阶段见 [docs/pure-kernel.md](docs/pure-kernel.md)。
+内核只提供机制，用户态提供功能。系统调用 ABI（调用号 / errno / 标志位 / 记录布局）只有一个定义点：
+`abi/` crate —— 内核与 `userland/libc` 都引用它，`make abi-check` 固化，任何一侧改坏都会构建或测试失败。
+完整目录树与模块职责见 [docs/project-structure.md](docs/project-structure.md)，内核/用户态划分与迁移阶段见 [docs/pure-kernel.md](docs/pure-kernel.md)。
 
 ## 文档入口
 
@@ -163,7 +166,7 @@ Cerlesse Kernel + CKM 内核控制核心 + CKM 用户态管理服务 + 可插拔
 第一版**不做**动态内核模块装载与图形界面。
 
 **已落地 CKM-1（内核接口 + 判定点 + syscall 257–259）、CKM-2（双槽 A/B 可写状态区 + 覆盖层机制）
-与 CKM-3（事务引擎，主机侧 `tools/pkgmgr/cpm.py`）**：回执、事务日志、`stage → activate → commit`
+与 CKM-3（事务引擎，主机侧 `userland/pkgmgr/cpm.py`）**：回执、事务日志、`stage → activate → commit`
 可回滚、掉电后 `recover`、`gc` 与单写者锁都已可脚本断言（`make test-ckm` / `make test-cpm`）；
 CKM-4（`ckmd`/`ckm`）起把事务接进内核侧用户态服务。
 

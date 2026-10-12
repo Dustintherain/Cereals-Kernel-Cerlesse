@@ -42,6 +42,13 @@ type Scenario struct {
 	AllowPanic bool `json:"allowPanic,omitempty"`
 	// SerialOnly 表示只分析已有串口日志、不启动命令（用于离线复核模式）。
 	SerialOnly bool `json:"serialOnly,omitempty"`
+	// Tags 是场景分组标签（纯内核化阶段五：内核场景不标，用户态集成场景标 `userland`）。
+	//
+	// 为什么用标签而不是两份 JSON：期望字符串只写一遍。内核侧 `make test-orch` 用
+	// `-exclude-tag userland`、跨仓库的 `make test-orch-userland` 用 `-tag userland`；
+	// 等 `userland/` 真的拆成独立仓库时，再按标签把场景物理拆成两个文件（那时拆
+	// 才有意义 —— 文件会跟着用户态一起走）。标签词表见 `config.go` 的 `KnownTags`。
+	Tags []string `json:"tags,omitempty"`
 }
 
 // Result 是单场景运行结果。

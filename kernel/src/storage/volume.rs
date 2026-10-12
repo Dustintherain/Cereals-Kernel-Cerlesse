@@ -19,14 +19,11 @@ use alloc::string::String;
 use crate::driver::block::{BlockDevice, SECTOR_SIZE};
 use crate::driver::serial;
 
-/// 卷记录的字节数（`storage_volumes` 的单元；内核侧唯一权威定义）。
-pub const VOLUME_RECORD_SIZE: usize = 64;
-/// `vol_id` 可读形式的字符上限（记录里占 16 字节：15 字符 + NUL）。
-pub const VOL_ID_MAX: usize = 15;
-/// 卷标容量（FAT 风格 11 字节）。
-pub const LABEL_MAX: usize = 11;
-/// `free_bytes` 的 unknown 哨兵（0 会让「盘满」与「没实现」无法区分）。
-pub const FREE_UNKNOWN: u64 = u64::MAX;
+/// 卷记录的字节数与字段宽度（**再导出**，定义在 `abi::volume` —— 阶段三起
+/// 「记录长什么样」的权威定义在 ABI 单一事实源，内核是写记录的一方、不是定义方）。
+pub use abi::volume::{
+    FREE_UNKNOWN, ID_MAX as VOL_ID_MAX, LABEL_MAX, RECORD_SIZE as VOLUME_RECORD_SIZE,
+};
 
 /// 探测到的文件系统类型（`fs_kind` 的取值就是 `code()`）。
 #[derive(Clone, Copy, PartialEq, Eq)]

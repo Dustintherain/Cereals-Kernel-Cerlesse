@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""`tools/pkgmgr/cpm.py`（H-06 **P0b** = **CKM-3** 事务引擎）的主机侧验收。
+"""`pkgmgr/cpm.py`（H-06 **P0b** = **CKM-3** 事务引擎）的主机侧验收。
 
-不启 QEMU、纯标准库：`make test-pkg` 调它（与 `tests/test_ckc.py` 一起）。
+住在 **`userland/pkgmgr/`**（纯内核化阶段五：安装/卸载/事务属于用户态管理服务，
+内核只保留权限判定与必要的持久化接口）。不启 QEMU、纯标准库：
+`make -C userland test-cpm` 调它（与同目录的 `tests/test_ckc.py` 一起）。
 断言的都是**产物事实**而不是措辞 —— 每次断言都能失败，不是走过场：
 
 1. **成功路径**：`add` 之后文件逐字节等于包内内容、回执的 `rev` = `.ckc` 的 payload 哈希
@@ -35,10 +37,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+# ROOT = 包管理器目录（本文件是 `<pkgmgr>/tests/test_cpm.py`）。
 ROOT = Path(__file__).resolve().parent.parent
-CPM = ROOT / "tools" / "pkgmgr" / "cpm.py"
+CPM = ROOT / "cpm.py"
 
-sys.path.insert(0, str(ROOT / "tools" / "pkgmgr"))
+sys.path.insert(0, str(ROOT))
 import ckc  # noqa: E402  （构造畸形/越界包与解析回执需要同一套底层原语）
 
 CHECKS = 0

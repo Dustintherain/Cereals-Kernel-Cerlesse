@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""`tools/pkgmgr/ckc.py`（CKC = Cerlesse Kernel Container，后缀 `.ckc`）的主机侧验收。
+"""`pkgmgr/ckc.py`（CKC = Cerlesse Kernel Container，后缀 `.ckc`）的主机侧验收。
 
-不启 QEMU、纯标准库：`make test-pkg` 调它。断言的都是「产物事实」而不是措辞：
+住在 **`userland/pkgmgr/`**（纯内核化阶段五：包管理器不属于内核，见
+`docs/pure-kernel.md` 3.5/3.6）。不启 QEMU、纯标准库：`make -C userland test-ckc` 调它。
+断言的都是「产物事实」而不是措辞：
 
 1. **确定性**：同一目录树打包两次 → 两个 `.ckc` 逐字节相同、rev 相同；
 2. **头部逐字段**：magic/版本/头长/flags/payload_off/payload_len/保留位 都要被查
@@ -24,11 +26,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+# ROOT = 包管理器目录（本文件是 `<pkgmgr>/tests/test_ckc.py`）；
+# 与内核实现在结构上没有任何路径耦合：内核只保有 `.ckc` 的**格式规范**与安装期校验。
 ROOT = Path(__file__).resolve().parent.parent
-CKC = ROOT / "tools" / "pkgmgr" / "ckc.py"
+CKC = ROOT / "ckc.py"
 SUFFIX = ".ckc"
 
-sys.path.insert(0, str(ROOT / "tools" / "pkgmgr"))
+sys.path.insert(0, str(ROOT))
 import ckc  # noqa: E402  （测试需要构造畸形容器，所以直接用同一套底层原语）
 
 CHECKS = 0

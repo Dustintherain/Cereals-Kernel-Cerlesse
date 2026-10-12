@@ -7,9 +7,11 @@
 //
 // 标志：
 //
-//	-config    场景配置 JSON（必填）
-//	-parallel  并发度（覆盖配置中的 concurrency，默认 0=自动）
-//	-root      仓库根目录（命令的工作目录，默认取配置文件所在目录的上一级）
+//	-config      场景配置 JSON（必填）
+//	-parallel    并发度（覆盖配置中的 concurrency，默认 0=自动）
+//	-root        仓库根目录（命令的工作目录，默认取配置文件所在目录的上一级）
+//	-tag         只跑带这些标签之一的场景（逗号分隔）—— 用户态集成：`-tag userland`
+//	-exclude-tag 跳过带任一标签的场景（逗号分隔）—— 内核侧：`-exclude-tag userland`
 package main
 
 import (
@@ -27,6 +29,8 @@ func main() {
 	configPath := flag.String("config", "", "scenario config JSON path")
 	parallel := flag.Int("parallel", 0, "override concurrency (0 = config/auto)")
 	root := flag.String("root", "", "repository root (default: parent dir of config)")
+	tagList := flag.String("tag", "", "only run scenarios carrying one of these tags (comma-separated)")
+	excludeTags := flag.String("exclude-tag", "", "skip scenarios carrying any of these tags (comma-separated)")
 	flag.Parse()
 
 	if *configPath == "" {
@@ -58,6 +62,21 @@ func main() {
 		}
 		scenarios = filtered
 	}
+	// 按责任分组（纯内核化阶段五）：内核侧只跑不含 `userland` 标签的场景。
+	if want := splitComma(*tagList); len(want) > 0 {
+		scenarios = filterByTag(scenarios, want, true)
+		if len(scenarios) == 0 {
+			fmt.Fprintf(os.Stderr, "testorch: no scenarios carry tag %q\n", *tagList)
+			os.Exit(2)
+		}
+	}
+	if skip := splitComma(*excludeTags); len(skip) > 0 {
+		scenarios = filterByTag(scenarios, skip, false)
+		if len(scenarios) == 0 {
+			fmt.Fprintf(os.Stderr, "testorch: all scenarios excluded by -exclude-tag %q\n", *excludeTags)
+			os.Exit(2)
+		}
+	}
 
 	limit := *parallel
 	if limit <= 0 {
@@ -86,6 +105,28 @@ func filterByName(scenarios []orchestrator.Scenario, nameList string) []orchestr
 	var out []orchestrator.Scenario
 	for _, sc := range scenarios {
 		if want[sc.Name] {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+// filterByTag 按标签过滤：keep=true 保留带任一标签的场景，keep=false 跳过它们。
+func filterByTag(scenarios []orchestrator.Scenario, tags []string, keep bool) []orchestrator.Scenario {
+	want := map[string]bool{}
+	for _, t := range tags {
+		want[t] = true
+	}
+	var out []orchestrator.Scenario
+	for _, sc := range scenarios {
+		matched := false
+		for _, t := range sc.Tags {
+			if want[t] {
+				matched = true
+				break
+			}
+		}
+		if matched == keep {
 			out = append(out, sc)
 		}
 	}
