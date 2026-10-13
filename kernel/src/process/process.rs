@@ -193,13 +193,13 @@ fn kstacks_base() -> *mut u8 {
 ///
 /// 栈顶**向下对齐到 16 字节**，这一点是必需的而不只是好看：
 ///
-/// - `syscall` 入口把 5 个参数按 `[u64; 5]` 放在 `栈顶 - 128` 处，内核侧再把它
-///   当成 `&[u64; 5]` 使用（见 `syscall::trampoline`）；
+/// - `syscall` 入口把 6 个参数按 `[u64; 6]` 放在 `栈顶 - 128` 处，内核侧再把它
+///   当成 `&[u64; 6]` 使用（见 `syscall::trampoline`）；
 /// - `TSS.RSP0` 也指向这里，ring3 中断/异常由 CPU 在此压入 trap frame；
 ///
 /// `KSTACKS` 是 `[[u8; N]; M]`（**对齐 1**），它在 `.bss` 里的实际地址由链接器
 /// 决定 —— 只要前面新增了一个奇数长度的静态量，栈顶就会变成奇地址，那个
-/// `&[u64; 5]` 随即成为 UB（debug 构建的 UB 检查会直接 panic：
+/// `&[u64; 6]` 随即成为 UB（debug 构建的 UB 检查会直接 panic：
 /// "unsafe precondition(s) violated: slice::from_raw_parts requires ... alignment"）。
 /// 因此在对齐上**不能指望运气**，这里显式对齐。
 fn kstack_top(slot: usize) -> u64 {
@@ -325,7 +325,7 @@ pub fn create(
             slot,
             state: ProcState::Ready,
             exit_code: 0,
-            frame: UserFrame::new_user(0, 0, 0, 0),
+            frame: UserFrame::new_user(0, 0, 0, 0, 0, 0),
             space: None,
             return_to: RunCtx::default(),
             // 初始凭证是内核凭证：调用方（顶层程序运行 / `fork` / `execve`）

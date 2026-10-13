@@ -13,10 +13,13 @@
 //!
 //! ## 三条刻意的取舍（都有理由，也都有对应的验收条目）
 //!
-//! 1. **`mmap` 只收 5 个参数**（`addr, len, prot, flags, fd`，无 `offset`）。
-//!    本内核的 syscall ABI 传 5 个参数（`rdi, rsi, rdx, r10, r8`）；匿名映射不需要
-//!    偏移，所以第 6 个参数现在恒为 0。要支持文件映射时必须先扩 ABI（`r9` 或
-//!    `mmap2` 风格），那是后续版本的事 —— 现在**明确拒绝**而不是假装支持。
+//! 1. **`mmap` 收 6 个参数**（`addr, len, prot, flags, fd, offset`，见 `syscall/mod.rs`）。
+//!    - **匿名映射**（`MAP_PRIVATE|MAP_ANONYMOUS`，`fd = -1`）：不使用偏移，要求
+//!      `offset = 0`（非 0 → `EINVAL`）；
+//!    - **文件映射**（v1.0 第三步）：`fd ≥ 3`、`flags = MAP_PRIVATE`、只读
+//!      （拒绝 `PROT_WRITE`/`PROT_EXEC`，不碰 W^X）、`offset` 必须**页对齐**；
+//!      `[offset, offset+len)` 的字节拷进新映射，文件尾之后补零。`MAP_SHARED`
+//!      （写回文件）仍未实现 —— 明确拒绝。
 //! 2. **W^X 是硬约束**：`PROT_WRITE|PROT_EXEC` 在 `mmap` 与 `mprotect` 上都是
 //!    `EINVAL`。自分配内存不存在「既可写又可执行」这一档；需要 JIT 的运行时走
 //!    「先 `mmap(RW)`、写完 `mprotect(RX)`」这条路（v1.0 之前 `mprotect` 落在
@@ -34,7 +37,8 @@
 //! 与文件类 syscall 一样，「内核真的校验过」这件事必须是可断言的串口事实。
 
 use crate::driver::serial;
-use crate::fs::vfs::EINVAL;
+use crate::fs::file;
+use crate::fs::vfs::{self, EINVAL};
 use crate::syscall::address_space::{
     UserSpace, PROT_EXEC, PROT_MASK, PROT_WRITE, USER_HEAP_MAX, USER_HEAP_VIRT, USER_MMAP_MAX,
 };
@@ -46,7 +50,7 @@ use abi::errno::EFAULT;
 
 /// `MAP_*`：只支持私有匿名映射；`MAP_FIXED`/`MAP_SHARED` 等一律 `EINVAL`。
 /// 位值**定义在 `abi::flags`**（阶段三的单一事实源）。
-use abi::flags::{MAP_ANONYMOUS, MAP_SUPPORTED};
+use abi::flags::{FD_FIRST_DYNAMIC, MAP_ANONYMOUS, MAP_PRIVATE, MAP_SUPPORTED};
 
 /// 取当前用户地址空间的可变引用。
 ///
@@ -73,7 +77,7 @@ fn page_round_up(len: u64) -> Option<u64> {
 /// 返回值恒为「当前 break」：成功时是页对齐后的新值（`>= addr`），失败时是原值。
 /// 用户态据此判断（`ret < addr` 即失败），与 Linux 的 `brk` 一致 ——
 /// 这也是将来 glibc 的 `sbrk`/`malloc` 能直接接上的前提。
-pub unsafe fn sys_brk(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_brk(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let addr = args[0];
     let space = match unsafe { space_mut(space) } {
         Some(space) => space,
@@ -110,15 +114,17 @@ pub unsafe fn sys_brk(args: &[u64; 5], space: *const UserSpace) -> i64 {
     after as i64
 }
 
-/// 系统调用 `mmap(addr, len, prot, flags, fd)`（**无 `offset`**，见模块文档）。
+/// 系统调用 `mmap(addr, len, prot, flags, fd, offset)`（`offset` = `args[5]`，见模块文档）。
 ///
 /// `addr` 只是提示、内核忽略（不支持 `MAP_FIXED`），返回内核选的页对齐地址。
-pub unsafe fn sys_mmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
+/// `offset` 只对文件映射有意义；匿名映射要求它为 0（非 0 → `EINVAL`）。
+pub unsafe fn sys_mmap(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let hint = args[0];
     let len = args[1];
     let prot = args[2];
     let flags = args[3];
     let fd = args[4];
+    let offset = args[5];
 
     let reject = |reason: &str| -> i64 {
         serial::print("user: mmap rejected (");
@@ -131,6 +137,8 @@ pub unsafe fn sys_mmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
         serial::print_hex(prot);
         serial::print(" flags=");
         serial::print_hex(flags);
+        serial::print(" offset=");
+        serial::print_hex(offset);
         serial::println("");
         EINVAL
     };
@@ -145,15 +153,6 @@ pub unsafe fn sys_mmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
     if prot & PROT_WRITE != 0 && prot & PROT_EXEC != 0 {
         return reject("PROT_WRITE|PROT_EXEC is not allowed (W^X)");
     }
-    if flags & MAP_ANONYMOUS == 0 {
-        return reject("file-backed mmap is not supported (need MAP_ANONYMOUS)");
-    }
-    if flags & MAP_SUPPORTED != flags {
-        return reject("flags must be exactly MAP_PRIVATE|MAP_ANONYMOUS");
-    }
-    if fd != u64::MAX {
-        return reject("MAP_ANONYMOUS expects fd=-1");
-    }
 
     let space = match unsafe { space_mut(space) } {
         Some(space) => space,
@@ -161,9 +160,76 @@ pub unsafe fn sys_mmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
             serial::println("user: mmap rejected (no current user address space)");
             return EFAULT;
         }
-    };    // `prot` 的合法性（未知位、W^X）已在上面的校验里拦下，这里直接交给地址空间层翻译成
-    // 页表标志（`PROT_NONE` 会得到一个「已分配但 ring3 不可访问」的映射）。
-    match space.mmap_anon(len, prot) {
+    };
+
+    if flags & MAP_ANONYMOUS != 0 {
+        // ---- 匿名映射：不用偏移 ----
+        if flags & MAP_SUPPORTED != flags {
+            return reject("flags must be exactly MAP_PRIVATE|MAP_ANONYMOUS");
+        }
+        if fd != u64::MAX {
+            return reject("MAP_ANONYMOUS expects fd=-1");
+        }
+        if offset != 0 {
+            return reject("MAP_ANONYMOUS requires offset=0");
+        }
+        let result = space.mmap_anon(len, prot);
+        return finish_mmap(result, len, prot, flags, offset, None);
+    }
+
+    // ---- 文件映射（v1.0 第三步）：只读、私有、offset 页对齐 ----
+    if flags != MAP_PRIVATE {
+        return reject("file-backed mmap supports MAP_PRIVATE only (no MAP_SHARED)");
+    }
+    if prot & (PROT_WRITE | PROT_EXEC) != 0 {
+        return reject("file-backed mmap is read-only (no PROT_WRITE/PROT_EXEC)");
+    }
+    if offset % PAGE_SIZE != 0 {
+        return reject("file-backed mmap offset must be page-aligned");
+    }
+    if fd == u64::MAX || fd < FD_FIRST_DYNAMIC as u64 {
+        return reject("file-backed mmap needs an open fd (>= 3)");
+    }
+    let Some(path) = file::path_of(fd as i32) else {
+        return reject("file-backed mmap fd is not open");
+    };
+    if !file::is_readable(fd as i32) {
+        return reject("file-backed mmap fd is not open for reading");
+    }
+    let data = match vfs::read_all(&path) {
+        Ok(data) => data,
+        Err(_) => return reject("file-backed mmap cannot read file"),
+    };
+    if offset >= data.len() as u64 {
+        return reject("file-backed mmap offset is past end of file");
+    }
+    let bytes = page_round_up(len).unwrap_or(0);
+    if bytes > USER_MMAP_MAX {
+        return reject("file-backed mmap length exceeds the mmap window");
+    }
+    let addr = match space.mmap_anon(len, prot) {
+        Ok(addr) => addr,
+        Err(errno) => return finish_mmap(Err(errno), len, prot, flags, offset, Some(&path)),
+    };
+    // 把 [offset, offset+len) 的字节拷进新映射；文件尾之后保持零（`mmap_anon` 已清零）。
+    let start = offset as usize;
+    let end = core::cmp::min(start + len as usize, data.len());
+    if end > start {
+        space.mmap_write(addr, &data[start..end]);
+    }
+    finish_mmap(Ok(addr), len, prot, flags, offset, Some(&path))
+}
+
+/// 统一打印 `mmap` 的结果并返回：成功一行 / 失败一行（文件映射多一个 `file=` 字段）。
+fn finish_mmap(
+    result: Result<u64, i64>,
+    len: u64,
+    prot: u64,
+    flags: u64,
+    offset: u64,
+    path: Option<&str>,
+) -> i64 {
+    match result {
         Ok(addr) => {
             serial::print("user: mmap len=");
             serial::print_dec(len);
@@ -171,6 +237,12 @@ pub unsafe fn sys_mmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
             serial::print_hex(prot);
             serial::print(" flags=");
             serial::print_hex(flags);
+            serial::print(" offset=");
+            serial::print_hex(offset);
+            if let Some(path) = path {
+                serial::print(" file=");
+                serial::print(path);
+            }
             serial::print(" -> ");
             serial::print_hex(addr);
             serial::print(" pages=");
@@ -192,7 +264,7 @@ pub unsafe fn sys_mmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
 }
 
 /// 系统调用 `munmap(addr, len)`：整段归还匿名映射（页对齐 + 全段已映射）。
-pub unsafe fn sys_munmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_munmap(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let addr = args[0];
     let len = args[1];
     let space = match unsafe { space_mut(space) } {
@@ -236,7 +308,7 @@ pub unsafe fn sys_munmap(args: &[u64; 5], space: *const UserSpace) -> i64 {
 ///   「先 `mmap(RW)` 写、再 `mprotect(RX)` 执行」这条路，而不是可写可执行的段。
 ///
 /// 返回 `0`；地址空间层拒绝时返回 `-EINVAL` 并把原因写在串口上。
-pub unsafe fn sys_mprotect(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_mprotect(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let addr = args[0];
     let len = args[1];
     let prot = args[2];

@@ -13,6 +13,8 @@
 //! | `static mut` 自增 | `RW` 段对 ring3 可写 | `hello: static counter=1` |
 //! | 非法指针 `write` | syscall 参数校验 | `user: EFAULT write ...` / `hello: bad write ret=-14` |
 //! | `brk` / `mmap` / `munmap` | **用户堆**（v0.9 第一步） | `user: brk base=0x8000020000`、`user: mmap len=8192 ... -> 0x8000060000`、`hello: heap PASS` |
+//! | `mmap` 第 6 参数 `offset` | syscall ABI 扩到 `r9`（v1.0）；匿名映射非 0 `offset` 明确拒绝 | `hello: mmap offset ret=-22`、`hello: mmap zero-offset ret=...` |
+//! | **文件映射**（`offset` 真正生效） | v1.0 第三步：`fd` 指向的文件 `[offset,offset+len)` 只读映射、`offset` 页对齐 | `hello: filemmap contents=1`、`hello: filemmap misaligned ret=-22`、`hello: filemmap PASS=1` |
 //! | `Vec` / `format!` | `#[global_allocator]` 真的落到内核 | `hello: vec len=200 sum=20100` |
 //! | `mprotect` | **运行时改保护属性**（v1.0 第一步）：`PROT_NONE` 关页 → 内核拒收该缓冲 → 恢复后内容原样 → 换 `RX` 并真的执行 | `user: mprotect addr=0x8000060000 len=4096 prot=0x0 -> pages=1`、`hello: mprotect none write ret=-14`、`hello: mprotect exec ret=42`、`hello: mprotect PASS=1` |
 //! | `nanosleep` | tick 真实推进 | `user: sleep done ticks=2` |
@@ -30,13 +32,17 @@ use alloc::vec::Vec;
 
 use libc::syscall::{raw, SYS_WRITE};
 use libc::{
-    brk, ckm_audit_read, ckm_component_state, ckm_policy_query, ckm_record_is_deny,
+    bind, brk, ckm_audit_read, ckm_component_state, ckm_policy_query, ckm_record_is_deny,
     ckm_record_need, close, component_id, component_kind, component_kind_name, component_state,
-    component_state_name, getpid, mmap, mprotect, munmap, nanosleep, open, println, read,
-    storage_rescan, write, AUDIT_RECORD_SIZE, CAP_CKM_SERVICE, CKM_OP_FS_WRITE, CKM_OP_POLICY_QUERY,
-    CKM_OP_STATE_WRITE, CKM_PREFIX_ETC, COMPONENT_RECORD_SIZE, EPERM, MAP_ANONYMOUS, MAP_PRIVATE,
-    O_CREAT, O_RDONLY, O_WRONLY, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE, STORAGE_RESCAN_ALL,
+    component_state_name, getpid, mmap, mmap_file, mmap_with_offset, mprotect, munmap, nanosleep,
+    net_config, open, println, read, recvfrom, sendto, socket,
+    storage_rescan, write, AF_INET, AUDIT_RECORD_SIZE, CAP_CKM_SERVICE, CKM_OP_FS_WRITE,
+    CKM_OP_POLICY_QUERY, CKM_OP_STATE_WRITE, CKM_PREFIX_ETC, COMPONENT_RECORD_SIZE, ENODEV, EPERM,
+    EADDRINUSE, EAFNOSUPPORT, EINVAL, ENOTSOCK, EPROTONOSUPPORT, INADDR_BROADCAST, IPPROTO_UDP,
+    MAP_ANONYMOUS, MAP_PRIVATE, O_CREAT, O_RDONLY, O_WRONLY, PROT_EXEC, PROT_NONE, PROT_READ,
+    PROT_WRITE, SOCK_DGRAM, SOCK_STREAM, STORAGE_RESCAN_ALL,
 };
+use libc::{AF_UNSPEC, NetConfig, SockAddrIn};
 
 /// 可写的静态变量：v0.7 的 ELF Loader 把 `RW` 段映射成 ring3 可写，
 /// 因此这里在运行期被改写（v0.6 会 #PF —— 代码页整体只读）。
@@ -59,6 +65,9 @@ const HEAP_STEP: u64 = 2 * 4096;
 const MMAP_LEN: usize = 2 * 4096;
 /// 内核 mmap 窗口上限（256 KiB，见 `address_space::USER_MMAP_MAX`）。
 const MMAP_MAX: usize = 64 * 4096;
+/// 文件映射自测用的文件与长度（1 页 + 1 KiB，因此 `offset = 4096` 有意义）。
+const MMAP_FILE_PATH: &str = "/tmp/mmap.bin";
+const MMAP_FILE_LEN: usize = 5120;
 /// `mprotect` 自测里要从 ring3 **执行**的机器码：`mov eax, 42; ret`。
 ///
 /// 先以 `mmap(PROT_READ|PROT_WRITE)` 写进页里，再 `mprotect(RX)` 改成只读可执行 ——
@@ -116,6 +125,9 @@ pub extern "C" fn main() -> i32 {
     // ---- 5. 用户堆：brk / mmap / munmap（v0.9 运行时前置条件） ----
     let heap_ok = heap_selftest();
 
+    // ---- 5b. 文件映射：把文件的一段只读映射进内存（v1.0 第三步，`offset` 真正生效） ----
+    let filemap_ok = file_mmap_selftest();
+
     // ---- 6. mprotect：PROT_NONE 关页 + RX 转换（v1.0 第一步） ----
     let prot_ok = mprotect_selftest();
 
@@ -127,6 +139,10 @@ pub extern "C" fn main() -> i32 {
         println!("hello: heap FAIL");
         return 43;
     }
+    if !filemap_ok {
+        println!("hello: filemmap FAIL");
+        return 46;
+    }
     if !prot_ok {
         println!("hello: mprotect FAIL");
         return 44;
@@ -137,7 +153,165 @@ pub extern "C" fn main() -> i32 {
         println!("hello: ckm FAIL");
         return 45;
     }
+
+    // ---- 9. v1.0：UDP 套接字最小集（socket/bind/sendto/recvfrom） ----
+    // 只有在总线上有网卡、且内核 DHCP 成功时才跑；否则跳过（`make test-user` 无网卡）。
+    if !socket_selftest() {
+        println!("hello: socket FAIL");
+        return 47;
+    }
     42
+}
+
+/// UDP 套接字自测（v1.0）：走一次**真实的**、自包含的网络往返 —— 用 `socket`/
+/// `bind`/`sendto`/`recvfrom` 向 QEMU slirp 的内置 DHCP 服务器发一条 DISCOVER，
+/// 收到 OFFER 并校验它（不必主机侧跑任何服务，与内核网络自测同一条路径）。
+///
+/// 每类结果都留在串口上可断言：`hello: socket fd=`、`hello: bind ret=`、
+/// `hello: net ip=… mac=…`、`hello: sendto ret=300`、`hello: recvfrom ret=… src=10.0.2.2:67`、
+/// `hello: socket dhcp=1`、`hello: socket PASS=1`。
+///
+/// 没有网卡时 `net_config` 返回 [`ENODEV`]，直接跳过并算通过 —— 这让同一个
+/// `/init` 在带网卡与不带网卡的测试里都能跑（不把「没有网卡」当失败）。
+fn socket_selftest() -> bool {
+    let mut ok = true;
+
+    // 0) ABI 负例（不需要网卡）：地址族/类型/协议、以及「fd 不是套接字」。
+    let bad_family = socket(AF_UNSPEC, SOCK_DGRAM, 0);
+    println!("hello: socket bad-family ret={}", bad_family);
+    ok &= bad_family == EAFNOSUPPORT; // -97
+    let bad_type = socket(AF_INET, SOCK_STREAM, 0);
+    println!("hello: socket stream ret={}", bad_type);
+    ok &= bad_type == EPROTONOSUPPORT; // -93
+
+    // 一个普通文件 fd 传给 `bind`：必须是 `-ENOTSOCK`（而不是被当成套接字）
+    let file_fd = open(MOTD_PATH, O_RDONLY);
+    if file_fd >= 3 {
+        let notsock = bind(file_fd as i32, &SockAddrIn::any(0));
+        println!("hello: bind on file fd ret={}", notsock);
+        ok &= notsock == ENOTSOCK; // -88
+        let _ = close(file_fd as i32);
+    }
+
+    // 未 `bind` 的套接字 `recvfrom`：`-EINVAL`（不知道收哪个端口）
+    let unbound = socket(AF_INET, SOCK_DGRAM, 0);
+    if unbound >= 3 {
+        let mut scratch = [0u8; 8];
+        let idle = recvfrom(unbound as i32, &mut scratch, None);
+        println!("hello: recvfrom unbound ret={}", idle);
+        ok &= idle == EINVAL; // -22
+        let _ = close(unbound as i32);
+    }
+
+    // 1) 拿到内核协商到的本机地址/网关/MAC（没有网卡/未 DHCP → ENODEV，跳过网络部分）。
+    let mut cfg = NetConfig::new();
+    let n = net_config(&mut cfg);
+    if n == ENODEV {
+        println!("hello: socket skip network (no network device)");
+        println!("hello: socket PASS={}", ok as u8);
+        return ok;
+    }
+    println!("hello: net_config ret={}", n);
+    ok &= n > 0;
+    let mac = cfg.mac();
+    println!(
+        "hello: net ip={}.{}.{}.{} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        cfg.ip()[0], cfg.ip()[1], cfg.ip()[2], cfg.ip()[3],
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    );
+
+    // 2) 建一个 UDP 套接字
+    let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    println!("hello: socket fd={}", fd);
+    if fd < 3 {
+        return false;
+    }
+    let fd = fd as i32;
+
+    // 3) 绑到 DHCP 客户端端口 68（与内核网络自测一致：OFFER 会回到 68）
+    let local = SockAddrIn::any(DHCP_CLIENT_PORT);
+    let bound = bind(fd, &local);
+    println!("hello: bind ret={}", bound);
+    ok &= bound == 0;
+    // 同一端口再绑一次 → `-EADDRINUSE`
+    let clash = socket(AF_INET, SOCK_DGRAM, 0);
+    if clash >= 3 {
+        let dup = bind(clash as i32, &SockAddrIn::any(DHCP_CLIENT_PORT));
+        println!("hello: bind in-use ret={}", dup);
+        ok &= dup == EADDRINUSE; // -98
+        let _ = close(clash as i32);
+    }
+
+    // 4) 拼一条 DHCP DISCOVER 并发给广播地址:67
+    let mut request = [0u8; DHCP_LEN];
+    build_discover(&mut request, mac);
+    let dst = SockAddrIn::new(INADDR_BROADCAST, DHCP_SERVER_PORT);
+    let sent = sendto(fd, &request, &dst);
+    println!("hello: sendto ret={}", sent);
+    ok &= sent == DHCP_LEN as isize;
+
+    // 5) 收 OFFER，并校验发送方端口与 BOOTP 内容
+    let mut reply = [0u8; 512];
+    let mut src = SockAddrIn::empty();
+    let got = recvfrom(fd, &mut reply, Some(&mut src));
+    println!(
+        "hello: recvfrom ret={} src={}.{}.{}.{}:{}",
+        got, src.addr()[0], src.addr()[1], src.addr()[2], src.addr()[3], src.port()
+    );
+    ok &= got > 0 && src.port() == DHCP_SERVER_PORT;
+    if got > 0 {
+        let reply_len = got as usize;
+        // BOOTP：op=2（reply）、magic cookie、yiaddr 非 0 ⇒ 真的是一张 OFFER
+        let is_reply = reply[0] == 2;
+        let cookie = reply_len >= 240 && reply[236..240] == [0x63, 0x82, 0x53, 0x63];
+        let yiaddr = [reply[16], reply[17], reply[18], reply[19]];
+        let assigned = yiaddr != [0, 0, 0, 0];
+        println!(
+            "hello: socket dhcp op={} cookie={} yiaddr={}.{}.{}.{}",
+            reply[0], cookie as u8, yiaddr[0], yiaddr[1], yiaddr[2], yiaddr[3]
+        );
+        ok &= is_reply && cookie && assigned;
+    }
+
+    // 6) 关掉套接字：内核必须回收套接字槽位（fd 也回到空闲）
+    let closed = close(fd);
+    println!("hello: socket close ret={}", closed);
+    ok &= closed == 0;
+
+    println!("hello: socket PASS={}", ok as u8);
+    ok
+}
+
+/// DHCP 服务器端口。
+const DHCP_SERVER_PORT: u16 = 67;
+/// DHCP 客户端端口（OFFER 的落点）。
+const DHCP_CLIENT_PORT: u16 = 68;
+/// DHCP 报文长度（RFC 2131 的最小报文：236 头 + 4 cookie + 选项 + 填充）。
+const DHCP_LEN: usize = 300;
+
+/// 拼一条 DHCP DISCOVER（BOOTP + options），与内核 `network/dhcp.rs` 同一种格式。
+///
+/// 固定请求**广播应答**（flags bit15）：OFFER 以广播帧回来，套接字一定能收到。
+/// `xid` 用一个固定值即可（一次启动只发一条）。
+fn build_discover(buf: &mut [u8; DHCP_LEN], mac: [u8; 6]) {
+    buf.fill(0);
+    buf[0] = 1; // op = BOOTREQUEST
+    buf[1] = 1; // htype = Ethernet
+    buf[2] = 6; // hlen
+    buf[4..8].copy_from_slice(&0x4345_524Cu32.to_be_bytes()); // xid = "CERL"
+    buf[10..12].copy_from_slice(&0x8000u16.to_be_bytes()); // 请求广播应答
+    buf[28..34].copy_from_slice(&mac); // chaddr
+    buf[236..240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]); // magic cookie
+    buf[240] = 53; // option: DHCP message type
+    buf[241] = 1;
+    buf[242] = 1; // DISCOVER
+    buf[243] = 55; // option: parameter request list
+    buf[244] = 4;
+    buf[245] = 1; // subnet mask
+    buf[246] = 3; // router
+    buf[247] = 6; // DNS
+    buf[248] = 54; // server identifier
+    buf[249] = 255; // END
 }
 
 /// CKM-1 自测：把「能力判定」在 ring3 上的结果留成可断言的证据。
@@ -306,7 +480,7 @@ fn heap_selftest() -> bool {
     ok &= un == 0;
 
     // --- 负例：每个错误码都要具体（不是「都失败就行」） ---
-    // 1) 缺 MAP_ANONYMOUS（文件映射未实现）→ EINVAL(-22)
+    // 1) 无 MAP_ANONYMOUS 但也没有有效 fd（libc 的 `mmap` 固定传 fd=-1）→ EINVAL(-22)
     let file_backed = mmap(4096, PROT_READ, MAP_PRIVATE);
     println!("hello: mmap file-backed ret={}", file_backed);
     ok &= file_backed == -22;
@@ -322,7 +496,18 @@ fn heap_selftest() -> bool {
     let wx = mmap(4096, PROT_WRITE | 0x4, MAP_PRIVATE | MAP_ANONYMOUS);
     println!("hello: mmap wx ret={}", wx);
     ok &= wx == -22;
-    // 5) munmap 未页对齐 → EINVAL(-22)
+    // 5) 匿名映射带非 0 `offset`（第 6 参数 `r9`；文件映射未实现）→ EINVAL(-22)
+    let offset = mmap_with_offset(4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 4096);
+    println!("hello: mmap offset ret={}", offset);
+    ok &= offset == -22;
+    // 6) `offset=0` 仍然成功（第 6 参数不破坏匿名映射）
+    let zero_offset = mmap_with_offset(4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0);
+    println!("hello: mmap zero-offset ret={}", zero_offset);
+    ok &= zero_offset > 0;
+    if zero_offset > 0 {
+        ok &= munmap(zero_offset as u64, 4096) == 0;
+    }
+    // 7) munmap 未页对齐 → EINVAL(-22)
     let misaligned = munmap(m as u64 + 1, MMAP_LEN);
     println!("hello: munmap misaligned ret={}", misaligned);
     ok &= misaligned == -22;
@@ -344,6 +529,75 @@ fn heap_selftest() -> bool {
     ok &= s.len() == 21;
 
     println!("hello: heap PASS={}", ok as u8);
+    ok
+}
+
+/// 文件映射自测（v1.0 第三步）：`mmap_file(fd, len, PROT_READ, MAP_PRIVATE, offset)`
+/// 把文件的 `[offset, offset+len)` 只读映射进本进程，验证内容与 `offset` 真的生效，
+/// 以及三类拒绝（非页对齐 `offset` / 写权限 / `MAP_SHARED`）。
+fn file_mmap_selftest() -> bool {
+    let mut ok = true;
+
+    // 1) 造一个已知模式的文件（5120 字节，`byte[i] = i & 0xff`）
+    let fd = open(MMAP_FILE_PATH, O_CREAT | O_WRONLY);
+    println!("hello: filemmap create {} fd={}", MMAP_FILE_PATH, fd);
+    if fd < 0 {
+        return false;
+    }
+    let mut buf = [0u8; 512];
+    let mut written = 0usize;
+    while written < MMAP_FILE_LEN {
+        for i in 0..buf.len() {
+            buf[i] = ((written + i) & 0xff) as u8;
+        }
+        let n = write(fd as i32, &buf);
+        if n <= 0 {
+            break;
+        }
+        written += n as usize;
+    }
+    let _ = close(fd as i32);
+    println!("hello: filemmap wrote={}", written);
+    ok &= written == MMAP_FILE_LEN;
+
+    // 2) 只读打开，映射 offset = 4096 处的一页
+    let rfd = open(MMAP_FILE_PATH, O_RDONLY);
+    println!("hello: filemmap open ro fd={}", rfd);
+    if rfd < 0 {
+        return false;
+    }
+    let m = mmap_file(rfd as i32, 4096, PROT_READ, MAP_PRIVATE, 4096);
+    println!("hello: filemmap mmap ret={}", m);
+    ok &= m > 0;
+    if m > 0 {
+        let p = m as usize as *const u8;
+        let mut good = true;
+        for i in 0..1024usize {
+            let want = ((4096 + i) & 0xff) as u8;
+            if unsafe { core::ptr::read_volatile(p.add(i)) } != want {
+                good = false;
+            }
+        }
+        println!("hello: filemmap contents={}", good as u8);
+        ok &= good;
+        let un = munmap(m as u64, 4096);
+        println!("hello: filemmap munmap ret={}", un);
+        ok &= un == 0;
+    }
+
+    // 3) 负例：每一类拒绝都要具体
+    let misaligned = mmap_file(rfd as i32, 4096, PROT_READ, MAP_PRIVATE, 1);
+    println!("hello: filemmap misaligned ret={}", misaligned);
+    ok &= misaligned == -22; // offset 未页对齐
+    let writable = mmap_file(rfd as i32, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 0);
+    println!("hello: filemmap write ret={}", writable);
+    ok &= writable == -22; // 文件映射只读
+    let shared = mmap_file(rfd as i32, 4096, PROT_READ, 0x1, 0);
+    println!("hello: filemmap shared ret={}", shared);
+    ok &= shared == -22; // MAP_SHARED 未实现
+    let _ = close(rfd as i32);
+
+    println!("hello: filemmap PASS={}", ok as u8);
     ok
 }
 

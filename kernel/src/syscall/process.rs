@@ -7,7 +7,7 @@
 //! | 调用 | 语义 |
 //! | ---- | ---- |
 //! | `fork()` | 复制当前地址空间与**当前用户帧**，子进程 `rax=0`；在父进程里返回子进程 PID |
-//! | `execve(path, argv)` | 用 `path` 的 ELF 替换当前映像（新地址空间 + 新 `argv` 用户栈），**不返回** |
+//! | `execve(path, argv, envp)` | 用 `path` 的 ELF 替换当前映像（新地址空间 + 新 `argv`/`envp` 用户栈），**不返回** |
 //! | `wait4(pid)` | 运行该子进程直到它退出，回收地址空间并返回其退出码 |
 //! | `exit(code)` | 标记僵尸进程并回到「谁在等我」的内核上下文 |
 //! | `getpid()` | 当前进程 PID |
@@ -47,7 +47,7 @@ const PATH_MAX: u64 = abi::limits::PATH_MAX;
 pub use abi::procinfo::PROCINFO_SIZE;
 /// `execve` 的 `argv` 项数上限 / 单参数上限 / 用户栈占用上限
 /// （**再导出**，定义在 `abi::limits`；用户栈 16 KiB，`argv` 只占一小块）。
-pub use abi::limits::{ARG_MAX, ARG_MAX_BYTES, ARG_MAX_LEN};
+pub use abi::limits::{ARG_MAX, ARG_MAX_BYTES, ARG_MAX_LEN, ENV_MAX, ENV_MAX_BYTES, ENV_MAX_LEN};
 /// `nanosleep` 的最大等待 tick 数；仅作为「PIT 停摆」时的兜底。
 const SLEEP_MAX_SPINS: u64 = 10_000;
 
@@ -59,7 +59,7 @@ const SLEEP_MAX_SPINS: u64 = 10_000;
 /// 地址空间**不在这里释放**：当前 CR3 还指向它。释放由回收方负责
 /// （子进程由 `wait4` 回收，顶层程序由 `syscall::user::run_process` 回收）——
 /// 顺序错了就是「释放掉自己正在跑的页表」。
-pub unsafe fn sys_exit(args: &[u64; 5], _space: *const UserSpace) -> i64 {
+pub unsafe fn sys_exit(args: &[u64; 6], _space: *const UserSpace) -> i64 {
     let code = args[0] as i64;
     serial::print("user: exit code=");
     serial::print_dec(code as u64);
@@ -88,7 +88,7 @@ pub unsafe fn terminate_from_fault() -> ! {
 }
 
 /// 系统调用 `getpid`：返回当前进程的 PID。
-pub unsafe fn sys_getpid(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
+pub unsafe fn sys_getpid(_args: &[u64; 6], _space: *const UserSpace) -> i64 {
     let pid = process::current().map(|p| p.pid).unwrap_or(0);
     serial::print("user: getpid -> ");
     serial::print_dec(pid);
@@ -114,7 +114,7 @@ pub unsafe fn sys_getpid(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
 /// 返回写入的记录数（`0` = 进程表为空），缓冲装不下时截断；负数 = `-errno`。
 /// 枚举的是**槽位顺序**（不是 PID 顺序）：`ps` 因此不需要排序逻辑，内核也不承诺
 /// 排序 —— 这就是「进程表长什么样」的如实转发。
-pub unsafe fn sys_getprocs(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_getprocs(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (buf_ptr, buf_len) = (args[0], args[1]);
     if (buf_len as usize) < PROCINFO_SIZE {
         return EINVAL;
@@ -164,7 +164,7 @@ pub unsafe fn sys_getprocs(args: &[u64; 5], space: *const UserSpace) -> i64 {
 /// `trampoline` 模块文档）。
 ///
 /// 失败（地址空间复制失败 / 进程表满）返回负 errno，且**不改变进程表**。
-pub unsafe fn sys_fork(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
+pub unsafe fn sys_fork(_args: &[u64; 6], _space: *const UserSpace) -> i64 {
     let Some(parent) = process::current() else {
         return ENOSYS; // 内核上下文里没有「进程」可复制
     };
@@ -213,15 +213,19 @@ pub unsafe fn sys_fork(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
     pid as i64
 }
 
-/// 系统调用 `execve(path, path_len, argv, argc)`：用新映像替换当前进程。
+/// 系统调用 `execve(path, path_len, argv, argc, envp, envc)`：用新映像替换当前进程。
 ///
-/// `argv` 指向用户内存里 `argc` 个 `(ptr, len)` 对（每对 16 字节）—— 与
-/// `open`/`write` 一样用「指针 + 长度」而不是 NUL 结尾，内核不需要在不可信
-/// 内存里找终止符，且每一段都在写入前经过 [`UserSpace::valid_user_range`] 校验。
+/// `argv`（`args[2]`/`args[3]`）与 `envp`（`args[4]`/`args[5]`，v1.0 起）都指向用户
+/// 内存里若干个 `(ptr, len)` 对（每对 16 字节）—— 与 `open`/`write` 一样用
+/// 「指针 + 长度」而不是 NUL 结尾，内核不需要在不可信内存里找终止符，且每一段都在
+/// 写入前经过 [`UserSpace::valid_user_range`] 校验。
+///
+/// `envp` 的每个字符串是 `NAME=VALUE`（内核不解析，只搬运）。`envp` 为 0 / `envc=0`
+/// 表示「新映像没有环境变量」—— 调用方（`libc::execve`）默认让它继承当前环境。
 ///
 /// 成功的路径是**不返回**的：换 CR3、换映像、然后 `iretq` 到新入口。
 /// 失败返回负 errno，**当前映像不受影响**（新地址空间在局部量里，失败即 `Drop`）。
-pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_exec(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let slot = process::current_index();
     if slot == NO_PROCESS {
         return ENOSYS; // execve 必须由某个进程发起
@@ -234,6 +238,8 @@ pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
     let path_len = args[1];
     let argv_ptr = args[2];
     let argc = args[3];
+    let envp_ptr = args[4];
+    let envc = args[5];
 
     // 1. 路径：长度 + 区间校验 → UTF-8 → 规范化
     if path_len == 0 || path_len > PATH_MAX {
@@ -266,6 +272,28 @@ pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
                 return EFAULT;
             }
             args_list[i as usize] =
+                unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) };
+        }
+    }
+
+    // 2.4 envp：与 argv 同一套「指针 + 长度」数组格式与同样的区间校验。
+    //     环境变量在 v1.0 之前完全不传（用户程序拿不到 PATH/HOME），这里补上：
+    //     `envp` 里的每一段同样是 `(ptr, len)`，字符串内容原样写进新进程用户栈。
+    if envc > ENV_MAX {
+        return EINVAL;
+    }
+    let mut envs_list: [&[u8]; ENV_MAX as usize] = [&[]; ENV_MAX as usize];
+    if envc > 0 {
+        if !space.valid_user_range(envp_ptr, envc * 16) {
+            return EFAULT;
+        }
+        for i in 0..envc {
+            let pair = (envp_ptr + i * 16) as *const u64;
+            let (ptr, len) = unsafe { (ptr::read(pair), ptr::read(pair.add(1))) };
+            if len > ENV_MAX_LEN || !space.valid_user_range(ptr, len) {
+                return EFAULT;
+            }
+            envs_list[i as usize] =
                 unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) };
         }
     }
@@ -309,7 +337,12 @@ pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
         Ok(stats) => stats,
         Err(err) => return err,
     };
-    let frame = match build_user_frame(&new_space, stats.entry, &args_list[..argc as usize]) {
+    let frame = match build_user_frame(
+        &new_space,
+        stats.entry,
+        &args_list[..argc as usize],
+        &envs_list[..envc as usize],
+    ) {
         Ok(frame) => frame,
         Err(err) => return err,
     };
@@ -347,6 +380,7 @@ pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
     drop(old_space);
     // fd 表仍是全局的：换映像等于换进程，继承的 fd 全部失效（见模块文档）
     crate::fs::file::reset();
+    crate::network::socket::reset();
 
     serial::print("user: exec pid=");
     serial::print_dec(process::process_mut(slot).map(|p| p.pid).unwrap_or(0));
@@ -375,7 +409,7 @@ pub unsafe fn sys_exec(args: &[u64; 5], space: *const UserSpace) -> i64 {
 /// - 子进程已经是僵尸（之前 `wait4` 过、或异常退出过）→ 直接取退出码；
 /// - 子进程还没跑过（刚 `fork`）→ 现在运行它，结束后取退出码；
 /// - 找不到该 pid 的直接子进程 → `-ECHILD`（含 PID 复用/非子进程）。
-pub unsafe fn sys_wait(args: &[u64; 5], _space: *const UserSpace) -> i64 {
+pub unsafe fn sys_wait(args: &[u64; 6], _space: *const UserSpace) -> i64 {
     let want = args[0];
     let Some(me) = process::current() else {
         return ECHILD;
@@ -398,7 +432,7 @@ pub unsafe fn sys_wait(args: &[u64; 5], _space: *const UserSpace) -> i64 {
 /// 系统调用 `nanosleep`：以 PIT tick（100Hz → 10ms）为单位等待 `args[0]` 个 tick。
 ///
 /// `syscall` 入口用 IA32_FMASK 清了 IF，因此等待期间显式 `sti; hlt` 让 PIT 推进。
-pub unsafe fn sys_sleep(args: &[u64; 5], _space: *const UserSpace) -> i64 {
+pub unsafe fn sys_sleep(args: &[u64; 6], _space: *const UserSpace) -> i64 {
     let ticks = args[0].max(1);
     let start = unsafe { clock::tick_count() };
     let deadline = start + ticks;
@@ -426,21 +460,33 @@ pub unsafe fn sys_sleep(args: &[u64; 5], _space: *const UserSpace) -> i64 {
     0
 }
 
-/// 构建 `argv` 用户栈并返回初始用户帧。
+/// 构建 `argv` / `envp` 用户栈并返回初始用户帧。
 ///
-/// 布局（从 [`USER_STACK_TOP`] 向下）：
+/// 布局（从 [`USER_STACK_TOP`] 向下；`argv` 与 `envp` 各占一块，块内格式相同）：
 ///
 /// ```text
 /// USER_STACK_TOP ─┬─ 保留 128 字节
 ///                 ├─ 参数字符串（每个以 NUL 结尾，内核不依赖终止符，NUL 只是给用户态看着方便）
 ///                 ├─ 对齐到 16
-///                 └─ argv 指针数组（argc 个 + 末尾 NULL）← 用户 RSP
+///                 ├─ argv 指针数组（argc 个 + 末尾 NULL）
+///                 ├─ 环境变量字符串（`NAME=VALUE`，每个以 NUL 结尾）
+///                 ├─ 对齐到 16
+///                 └─ envp 指针数组（envc 个 + 末尾 NULL）← 用户 RSP
 /// ```
 ///
-/// `argc`/`argv` 通过入口寄存器 `rdi`/`rsi` 交给 `libc` 的 `_start`。
-/// `argv` 原样传递（内核**不**把路径塞进 `argv[0]`）：调用方写什么就是什么，
-/// 这也让 Shell 能把命令名本身当 `argv[0]`。
-fn build_user_frame(space: &UserSpace, entry: u64, args: &[&[u8]]) -> Result<UserFrame, i64> {
+/// `argc`/`argv`/`envc`/`envp` 通过入口寄存器 `rdi`/`rsi`/`rdx`/`r10` 交给
+/// `libc` 的 `_start`（见 [`UserFrame::new_user`]）。`argv` 原样传递（内核**不**把
+/// 路径塞进 `argv[0]`）：调用方写什么就是什么，这也让 Shell 能把命令名本身当 `argv[0]`。
+///
+/// `envp` 里的每一项都是调用方给的 `NAME=VALUE` 字节串，内核只做区间与长度校验，
+/// 不解析内容 —— 「环境变量的语义」属于用户态（`libc::env`、Shell），内核只负责
+/// 把它从旧映像搬到新映像（这正是 `execve` 语义）。
+fn build_user_frame(
+    space: &UserSpace,
+    entry: u64,
+    args: &[&[u8]],
+    envs: &[&[u8]],
+) -> Result<UserFrame, i64> {
     let total: u64 = args.iter().map(|a| a.len() as u64 + 1).sum();
     if total > ARG_MAX_BYTES {
         return Err(-7); // -E2BIG
@@ -467,21 +513,55 @@ fn build_user_frame(space: &UserSpace, entry: u64, args: &[&[u8]]) -> Result<Use
         bytes[i * 8..i * 8 + 8].copy_from_slice(&ptr.to_le_bytes());
     }
     space.stack_write(argv_base, &bytes[..count * 8]);
+
+    // ---- envp：紧贴 argv 指针数组下方，与 argv 各用各的栈预算 ----
+    let env_total: u64 = envs.iter().map(|e| e.len() as u64 + 1).sum();
+    if env_total > ENV_MAX_BYTES {
+        return Err(-7);
+    }
+    let floor = USER_STACK_TOP - ARG_MAX_BYTES - ENV_MAX_BYTES;
+    let mut ecursor = argv_base;
+    let mut epointers = [0u64; ENV_MAX as usize + 1];
+    for (i, env) in envs.iter().enumerate() {
+        ecursor -= env.len() as u64 + 1;
+        if ecursor < floor {
+            return Err(-7);
+        }
+        space.stack_write(ecursor, env);
+        space.stack_write(ecursor + env.len() as u64, &[0]);
+        epointers[i] = ecursor;
+    }
+    let env_top = align_down(ecursor, 16);
+    let ecount = envs.len() + 1;
+    let env_base = env_top - (ecount as u64) * 8;
+    if env_base < floor {
+        return Err(-7);
+    }
+    let mut ebytes = [0u8; (ENV_MAX as usize + 1) * 8];
+    for (i, ptr) in epointers[..ecount].iter().enumerate() {
+        ebytes[i * 8..i * 8 + 8].copy_from_slice(&ptr.to_le_bytes());
+    }
+    space.stack_write(env_base, &ebytes[..ecount * 8]);
+
     Ok(UserFrame::new_user(
         entry,
-        argv_base,
+        env_base,
         args.len() as u64,
         argv_base,
+        envs.len() as u64,
+        env_base,
     ))
 }
 
-/// 供 `syscall::user` 复用的入口构建：`argv` 由调用方给（顶层程序给 `[path]`）。
+/// 供 `syscall::user` 复用的入口构建：`argv`/`envp` 由调用方给
+/// （顶层程序给 `[path]` 与内核默认环境 `user::DEFAULT_ENV`）。
 pub fn user_frame_for(
     space: &UserSpace,
     entry: u64,
     args: &[&[u8]],
+    envs: &[&[u8]],
 ) -> Result<UserFrame, i64> {
-    build_user_frame(space, entry, args)
+    build_user_frame(space, entry, args, envs)
 }
 
 /// 结束当前进程的内核侧：恢复「谁在等我」并跳回去。**不返回**。

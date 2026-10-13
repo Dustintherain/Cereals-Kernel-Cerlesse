@@ -14,6 +14,7 @@
 //! | [`limits`] | 参数上限（路径、IO、`argv`） | 内核 `file`/`dir`/`process`、libc |
 //! | [`dirent`] | `getdents` 的 88 字节记录 | 内核 `syscall::dir`、libc |
 //! | [`procinfo`] | `getprocs` 的 40 字节记录 | 内核 `syscall::process`、libc |
+//! | [`socket`] | `AF_INET`/`SOCK_DGRAM` 常量、`sockaddr_in` 与 `net_config` 布局 | 内核 `syscall::socket`、libc |
 //! | [`volume`] | `storage_*` 的 64 字节卷记录与 `flags` | 内核 `storage::volume`、libc |
 //! | [`ckm`] | CKM 记录布局、能力位、op 编号、受保护前缀 | 内核 `ckm::*`、libc |
 //! | [`record`] | **编译期**断言：尺寸/对齐/号段不重叠 | 任何引用者（编译失败即证据） |
@@ -41,12 +42,13 @@ pub mod flags;
 pub mod limits;
 pub mod procinfo;
 pub mod record;
+pub mod socket;
 pub mod syscall;
 pub mod volume;
 
 #[cfg(test)]
 mod tests {
-    use crate::{ckm, dirent, errno, procinfo, record, syscall, volume};
+    use crate::{ckm, dirent, errno, procinfo, record, socket, syscall, volume};
 
     /// 调用号唯一、落在 `SYS_MAX` 内、且排序后就是 [`syscall::NAMED`]。
     #[test]
@@ -77,9 +79,36 @@ mod tests {
         assert!(!syscall::is_cerlesse_segment(syscall::SYS_MAX));
         // Linux 号段里的号在本 ABI 里只能是我们自己用的那几个（不能顺手占用无关号）
         assert_eq!(syscall::SYS_READ, 0);
+        assert_eq!(syscall::SYS_SOCKET, 41);
+        assert_eq!(syscall::SYS_SENDTO, 44);
+        assert_eq!(syscall::SYS_RECVFROM, 45);
+        assert_eq!(syscall::SYS_BIND, 49);
         assert_eq!(syscall::SYS_GETDENTS, 78);
         assert_eq!(syscall::SYS_GETPROCS, 256);
-        assert_eq!(syscall::SYS_MAX, 267);
+        assert_eq!(syscall::SYS_NET_CONFIG, 267);
+        assert_eq!(syscall::SYS_MAX, 268);
+    }
+
+    /// Socket ABI：常量取值、`sockaddr_in` / `net_config` 布局自洽。
+    #[test]
+    fn socket_abi_literals() {
+        assert_eq!(socket::AF_INET, 2);
+        assert_eq!(socket::AF_UNSPEC, 0);
+        assert_eq!(socket::SOCK_STREAM, 1);
+        assert_eq!(socket::SOCK_DGRAM, 2);
+        assert_eq!(socket::IPPROTO_TCP, 6);
+        assert_eq!(socket::IPPROTO_UDP, 17);
+        // 高位标志与类型位不重叠（内核按掩码分开判）
+        assert_eq!(socket::SOCK_FLAGS & socket::SOCK_TYPE_MASK, 0);
+        assert_eq!(socket::SOCKADDR_IN_SIZE, 16);
+        assert_eq!(socket::SOCKADDR_IN_PORT_OFFSET, 2);
+        assert_eq!(socket::SOCKADDR_IN_ADDR_OFFSET, 4);
+        assert_eq!(socket::UDP_PAYLOAD_MAX, 1472);
+        assert_eq!(socket::NET_CONFIG_SIZE, 16);
+        assert_eq!(socket::NET_CONFIG_IP_OFFSET, 0);
+        assert_eq!(socket::NET_CONFIG_GATEWAY_OFFSET, 4);
+        assert_eq!(socket::NET_CONFIG_MAC_OFFSET, 8);
+        assert_eq!(socket::PORT_ANY, 0);
     }
 
     /// 已命名但未实现的号必须**在号段内**、且逐个可查名字（串口证据依赖它）。

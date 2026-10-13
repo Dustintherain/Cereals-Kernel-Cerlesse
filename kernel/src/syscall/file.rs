@@ -256,7 +256,7 @@ unsafe fn read_stdin(space: *const UserSpace, buf: u64, count: u64) -> i64 {
 }
 
 /// 系统调用 `read(fd, buf, count)`。
-pub unsafe fn sys_read(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_read(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let fd = args[0] as i32;
     let buf = args[1];
     let count = args[2];
@@ -293,7 +293,7 @@ pub unsafe fn sys_read(args: &[u64; 5], space: *const UserSpace) -> i64 {
 }
 
 /// 系统调用 `write(fd, buf, count)`。
-pub unsafe fn sys_write(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_write(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let fd = args[0] as i32;
     let buf = args[1];
     let count = args[2];
@@ -341,7 +341,7 @@ pub unsafe fn sys_write(args: &[u64; 5], space: *const UserSpace) -> i64 {
 ///
 /// 参数里带长度而不是要求 NUL 结尾：用户缓冲已经被内核校验过区间，
 /// 用长度就不需要在用户内存里找终止符（少一次不可信内存上的扫描）。
-pub unsafe fn sys_open(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_open(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let ptr = args[0];
     let len = args[1];
     let flags = args[2] as i32;
@@ -396,11 +396,17 @@ pub unsafe fn sys_open(args: &[u64; 5], space: *const UserSpace) -> i64 {
     }
 }
 
-/// 系统调用 `close(fd)`：释放 fd 槽位。
-pub unsafe fn sys_close(args: &[u64; 5], _space: *const UserSpace) -> i64 {
+/// 系统调用 `close(fd)`：释放 fd 槽位（文件与套接字共用编号空间）。
+///
+/// 关掉套接字时顺带回收 [`crate::network::socket`] 里的槽位 —— fd 表只存整数 id，
+/// 「关掉一个 socket fd」必须在两处同时生效（文件没有这一步）。
+pub unsafe fn sys_close(args: &[u64; 6], _space: *const UserSpace) -> i64 {
     let fd = args[0] as i32;
     match fdtable::close(fd) {
-        Ok(()) => {
+        Ok(closed) => {
+            if let fdtable::ClosedFd::Socket(id) = closed {
+                crate::network::socket::release(id);
+            }
             serial::print("user: close fd=");
             serial::print_dec(fd as u64);
             serial::println("");

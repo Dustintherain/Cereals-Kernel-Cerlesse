@@ -25,6 +25,9 @@
 /// IPv4 头长度（无选项）。
 pub const HEADER_LEN: usize = 20;
 
+/// 协议号：ICMP。
+pub const PROTO_ICMP: u8 = 1;
+
 /// 协议号：UDP。
 pub const PROTO_UDP: u8 = 17;
 

@@ -6,6 +6,9 @@
 //!   1/2 直接写串口（由 syscall 层完成，不在这里）；
 //! - **动态 fd 从 [`FD_FIRST_DYNAMIC`] (=3) 开始**，`open` 取**最小空闲槽位**
 //!   （因此「close 之后再 open 会复用同一个 fd」是可用断言观察到的行为）；
+//! - v1.0 起槽位里除了文件还可以是**套接字**（[`Slot::Socket`]）：`socket` 分配的
+//!   fd 与文件 fd 共用同一个编号空间（Linux 如此），`read`/`write` 一个 UDP 套接字
+//!   返回 [`abi::errno::ENOTCONN`]（本内核没有 `connect`），`close` 对两者都有效；
 //! - 每个 fd 记录 `path` + `offset` + 读写模式。`offset` 由 `read`/`write`
 //!   推进，这是 v0.7 唯一的位置状态（没有 `lseek`、没有 `O_APPEND`）。
 //!
@@ -71,9 +74,31 @@ pub struct FileHandle {
     pub mode: OpenMode,
 }
 
+/// 一个 fd 槽位的两种可能：打开的文件，或一个 UDP 套接字。
+///
+/// 套接字只在**这里**存一个整数 id（套接字状态表在 `crate::network::socket`）——
+/// fd 表因此不必知道网络栈的任何细节，`socket`/`bind`/`sendto`/`recvfrom`
+/// 的语义都留在 syscall 与网络层。
+#[derive(Debug)]
+pub enum Slot {
+    /// 打开的文件
+    File(FileHandle),
+    /// 套接字（`crate::network::socket` 里的槽位 id）
+    Socket(u16),
+}
+
+/// `close` 释放掉的槽位种类（调用方据此决定要不要回收套接字）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClosedFd {
+    /// 关掉的是一个文件
+    File,
+    /// 关掉的是一个套接字（携带它的 id，由调用方回收）
+    Socket(u16),
+}
+
 /// fd 表。
 pub struct FdTable {
-    slots: [Option<FileHandle>; FD_MAX],
+    slots: [Option<Slot>; FD_MAX],
 }
 
 impl FdTable {
@@ -142,11 +167,11 @@ pub fn open(path: &str, flags: i32) -> Result<i32, i64> {
             if i < FD_FIRST_DYNAMIC as usize || slot.is_some() {
                 continue;
             }
-            *slot = Some(FileHandle {
+            *slot = Some(Slot::File(FileHandle {
                 path: path.clone(),
                 offset: 0,
                 mode,
-            });
+            }));
             return Ok(i as i32);
         }
         Err(vfs::ENOSPC) // fd 用尽（16 - 3 = 13 个动态槽位）
@@ -160,9 +185,23 @@ pub fn open(path: &str, flags: i32) -> Result<i32, i64> {
 /// 克隆是刻意的：判定会打串口/写审计，不应在持有 fd 表的情况下做。
 pub fn path_of(fd: i32) -> Option<String> {
     with_table(|t| {
+        t.slots.get(fd as usize).and_then(|slot| match slot {
+            Some(Slot::File(h)) => Some(h.path.clone()),
+            _ => None,
+        })
+    })
+}
+
+/// 某个已打开的 fd 是否**可读**（`mmap` 的文件映射用它拒绝只写打开的 fd）。
+pub fn is_readable(fd: i32) -> bool {
+    with_table(|t| {
         t.slots
             .get(fd as usize)
-            .and_then(|slot| slot.as_ref().map(|h| h.path.clone()))
+            .and_then(|slot| match slot {
+                Some(Slot::File(h)) => Some(h.mode.readable()),
+                _ => None,
+            })
+            .unwrap_or(false)
     })
 }
 
@@ -175,6 +214,11 @@ pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize, i64> {
             .ok_or(vfs::EBADF)?
             .as_mut()
             .ok_or(vfs::EBADF)?; // 未打开的 fd（含 0/1/2）
+        let slot = match slot {
+            Slot::File(h) => h,
+            // 套接字不是文件：UDP 走 `recvfrom`（没有 connect，`read` 无从定位对端）
+            Slot::Socket(_) => return Err(abi::errno::ENOTCONN),
+        };
         if !slot.mode.readable() {
             return Err(vfs::EBADF); // 只写打开
         }
@@ -193,6 +237,10 @@ pub fn write(fd: i32, data: &[u8]) -> Result<usize, i64> {
             .ok_or(vfs::EBADF)?
             .as_mut()
             .ok_or(vfs::EBADF)?;
+        let slot = match slot {
+            Slot::File(h) => h,
+            Slot::Socket(_) => return Err(abi::errno::ENOTCONN),
+        };
         if !slot.mode.writable() {
             return Err(vfs::EBADF); // 只读打开
         }
@@ -202,16 +250,42 @@ pub fn write(fd: i32, data: &[u8]) -> Result<usize, i64> {
     })
 }
 
-/// `close(fd)`：释放槽位。
-pub fn close(fd: i32) -> Result<(), i64> {
+/// `close(fd)`：释放槽位，返回被关掉的种类（套接字由调用方回收）。
+pub fn close(fd: i32) -> Result<ClosedFd, i64> {
     if fd < FD_FIRST_DYNAMIC {
         return Err(vfs::EBADF); // 0/1/2 是保留位，不能关闭
     }
     with_table(|t| {
         let slot = t.slots.get_mut(fd as usize).ok_or(vfs::EBADF)?;
-        if slot.take().is_none() {
-            return Err(vfs::EBADF);
+        match slot.take() {
+            Some(Slot::File(_)) => Ok(ClosedFd::File),
+            Some(Slot::Socket(id)) => Ok(ClosedFd::Socket(id)),
+            None => Err(vfs::EBADF),
         }
-        Ok(())
+    })
+}
+
+/// 取某个 fd 对应的套接字 id（不是套接字返回 `None`）。
+/// `bind`/`sendto`/`recvfrom` 用它把 fd 变成网络层能用的句柄。
+pub fn socket_of(fd: i32) -> Option<u16> {
+    with_table(|t| {
+        t.slots.get(fd as usize).and_then(|slot| match slot {
+            Some(Slot::Socket(id)) => Some(*id),
+            _ => None,
+        })
+    })
+}
+
+/// 为套接字 `id` 分配一个动态 fd（最小空闲槽位；用尽 [`vfs::ENOSPC`]）。
+pub fn open_socket(id: u16) -> Result<i32, i64> {
+    with_table(|t| {
+        for (i, slot) in t.slots.iter_mut().enumerate() {
+            if i < FD_FIRST_DYNAMIC as usize || slot.is_some() {
+                continue;
+            }
+            *slot = Some(Slot::Socket(id));
+            return Ok(i as i32);
+        }
+        Err(vfs::ENOSPC)
     })
 }

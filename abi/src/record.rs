@@ -17,7 +17,7 @@
 //! | R6 | 掩码自洽（`PROT_MASK` / `MAP_SUPPORTED` / `O_ALLOWED`） | 内核用掩码拒绝未知位 |
 //! | R7 | 盘符/容量哨兵不与合法值冲突 | `LETTER_NONE` 必须不是 A–Z |
 
-use crate::{ckm, dirent, flags, procinfo, syscall, volume};
+use crate::{ckm, dirent, flags, procinfo, socket, syscall, volume};
 
 /// 所有记录里最大的一条（自测与文档用；页内对齐的下界检查见 R3）。
 pub const MAX_RECORD_SIZE: usize = {
@@ -73,8 +73,8 @@ const _: () = assert!(syscall::CERLESSE_SEGMENT_START == 256);
 // R5：`SYS_MAX` 覆盖全部已命名号（含已命名未实现的号）。
 const _: () = assert!(syscall::SYS_MAX > syscall::SYS_STORAGE_FORMAT);
 const _: () = assert!(syscall::SYS_MAX > syscall::SYS_CKM_POLICY_SET);
-const _: () = assert!(syscall::SYS_MAX == 267);
-const _: () = assert!(syscall::NAMED.len() == 26);
+const _: () = assert!(syscall::SYS_MAX == 268);
+const _: () = assert!(syscall::NAMED.len() == 31);
 
 // R6：掩码自洽（内核按掩码拒未知位，掩码少一位就会静默接受）。
 const _: () = assert!(flags::PROT_MASK == flags::PROT_READ | flags::PROT_WRITE | flags::PROT_EXEC);
@@ -87,6 +87,12 @@ const _: () = assert!(flags::FD_FIRST_DYNAMIC == 3);
 const _: () = assert!(volume::LETTER_NONE < b'A');
 const _: () = assert!(volume::FREE_UNKNOWN != 0);
 const _: () = assert!(volume::MOUNT_RDONLY != 0);
+// R8：Socket 记录/布局自洽（`sockaddr_in` 与 `net_config` 的字段不越界）。
+const _: () = assert!(socket::SOCKADDR_IN_SIZE == 16);
+const _: () = assert!(socket::SOCKADDR_IN_ADDR_OFFSET + 4 <= socket::SOCKADDR_IN_SIZE);
+const _: () = assert!(socket::NET_CONFIG_MAC_OFFSET + 6 <= socket::NET_CONFIG_SIZE);
+const _: () = assert!(socket::SOCK_FLAGS & socket::SOCK_TYPE_MASK == 0);
+
 // 受保护前缀的下标必须与数组顺序一致（编译期能查的部分）。
 const _: () = assert!(ckm::PREFIX_ETC == 0);
 const _: () = assert!(ckm::PREFIX_INIT == 3);

@@ -7,6 +7,8 @@
 //! - [`syscall_table`]：编号 → handler 的分发表；
 //! - [`process`] / [`file`] / [`memory`] / [`dir`]：已实现的 syscall
 //!   （exit/getpid/sleep/getprocs、read/write/open/close、mmap/munmap/brk、getdents）；
+//! - [`socket`]：UDP 套接字最小集（v1.0）—— `socket`/`bind`/`sendto`/`recvfrom`
+//!   与 `net_config`，把 v0.9 的内核网络自测接到用户态（见 `docs/syscall.md`）；
 //! - [`ckm`]：CKM 管理接口（CKM-1）—— `ckm_policy_query`(257) / `ckm_audit_read`(258)
 //!   / `ckm_component_state`(259)，判定点落点见 `docs/ckm.md` 3.4；
 //! - [`user`]：用户程序与 ring3 运行驱动 —— `/init`（`user/hello` 的 ELF，从 RAMFS 装载）
@@ -16,7 +18,8 @@
 //! - 入口指令：**`syscall` / `sysret`**（ADR：v0.6 采用快速路径，非 `int 0x80`）。
 //!   `syscall` 把 RIP 存 `rcx`、RFLAGS 存 `r11`，**不切换栈**，故入口汇编
 //!   自行切到专用内核栈（见 `trampoline`）。
-//! - 编号：`rax`；参数：`rdi, rsi, rdx, r10, r8`；返回值：`rax`。
+//! - 编号：`rax`；参数：`rdi, rsi, rdx, r10, r8, r9`（第 6 个参数 `r9` 是 v1.0 起的
+//!   扩展槽：`mmap` 的 `offset` 与 `execve` 的 `envp` 都用它）；返回值：`rax`。
 //! - 错误返回：负数表示 `-errno`（如 `-ENOSYS = -38`），非负数为正常返回值。
 
 pub mod address_space;
@@ -27,6 +30,7 @@ pub mod elf;
 pub mod file;
 pub mod memory;
 pub mod process;
+pub mod socket;
 pub mod storage;
 pub mod syscall_table;
 pub mod trampoline;
@@ -44,9 +48,9 @@ pub use abi::errno::ENOSYS;
 ///
 /// # Safety
 ///
-/// - `args` 必须指向 5 个 `u64`（`rdi, rsi, rdx, r10, r8`），且 **8 字节对齐**；
+/// - `args` 必须指向 6 个 `u64`（`rdi, rsi, rdx, r10, r8, r9`），且 **8 字节对齐**；
 ///   参数帧由入口放在对齐过的内核栈顶下方（见 `process::kstack_top` 的对齐说明），
-///   不对齐时下面的 `&*(args as *const [u64; 5])` 会触发 debug 构建的 UB 检查；
+///   不对齐时下面的 `&*(args as *const [u64; 6])` 会触发 debug 构建的 UB 检查；
 /// - `space` 必须是当前正在运行的用户地址空间（或空指针，表示内核自身发起）。
 #[no_mangle]
 pub unsafe extern "C" fn syscall_dispatch(
@@ -54,7 +58,7 @@ pub unsafe extern "C" fn syscall_dispatch(
     args: *const u64,
     space: *const UserSpace,
 ) -> u64 {
-    let args_ref: &[u64; 5] = unsafe { &*(args as *const [u64; 5]) };
+    let args_ref: &[u64; 6] = unsafe { &*(args as *const [u64; 6]) };
     // 已命名但未实现的号：留下「谁在依赖它」的记录。
     // 这是一条**依赖关系证据**，不是诊断噪声：调用未实现的号时串口上会出现
     // `syscall: ENOSYS nr=57 name=fork`（v0.9 第三步之前），而不是只靠一句

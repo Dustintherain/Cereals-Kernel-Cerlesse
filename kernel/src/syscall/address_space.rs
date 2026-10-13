@@ -541,6 +541,36 @@ impl UserSpace {
         }
     }
 
+    /// 把 `data` 写进 **mmap 窗口**的虚拟地址 `virt`（文件映射装载时用）。
+    ///
+    /// 与 [`UserSpace::stack_write`] 同一套做法：此时内核还跑在自己的 CR3 下，
+    /// 因此按页帧的**物理地址**写入（内核恒等映射物理内存），不需要先切页表。
+    /// `virt` 必须落在已映射的 mmap 页里（调用方先 `mmap_anon` 再调用）。
+    ///
+    /// # Panics
+    /// 目标页未映射时 panic：这是内核内部契约，调用顺序错了应当立刻显形。
+    pub fn mmap_write(&self, virt: u64, data: &[u8]) {
+        let mut done = 0usize;
+        while done < data.len() {
+            let v = virt + done as u64;
+            let offset = v - USER_MMAP_VIRT;
+            let index = (offset / PAGE_SIZE) as usize;
+            let in_page = (offset % PAGE_SIZE) as usize;
+            assert!(index < USER_MMAP_PAGES, "mmap_write 越出 mmap 窗口");
+            let frame = self.mmap[index].expect("mmap_write 目标页未映射");
+            let room = PAGE_SIZE as usize - in_page;
+            let n = room.min(data.len() - done);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr().add(done),
+                    (frame.start_address() + in_page as u64) as *mut u8,
+                    n,
+                )
+            };
+            done += n;
+        }
+    }
+
     /// 当前 break（页对齐）。`brk(0)` 的返回值。
     pub fn brk_value(&self) -> u64 {
         self.brk

@@ -12,7 +12,7 @@
 //!   v0.9 第五步补上用户态读内核表的两个调用：`getdents`（目录项，`user/ls`）与
 //!   `getprocs`（进程表快照，`user/ps`）—— 两者都是**定长记录**，配套的
 //!   `dirent_*` / `procinfo_*` 解析器也在这一层（用户程序不该自己算偏移）；
-//! - [`args`]：`argc` / `argv`（由 `execve` 与内核运行驱动一起送入 `_start`）；
+//! - [`args`] / [`env`]：`argc`/`argv` 与 `envc`/`envp`（由 `execve` 与内核运行驱动一起送入 `_start`；`env` 在 syscall ABI 扩到第 6 参数后可用）；
 //! - [`heap`]：`#[global_allocator]`（bump over `mmap`）—— 用户程序因此可以用
 //!   `Vec`/`String`/`Box`（在此之前只能把数据放在栈或静态数组里）；
 //! - [`console`]：`print!` / `println!`（固定缓冲，一次 `write` 送出一整行）；
@@ -51,19 +51,23 @@
 
 pub mod args;
 pub mod console;
+pub mod env;
 pub mod heap;
 pub mod path;
+pub mod socket;
 pub mod syscall;
 
 pub use crate::args::{arg, arg_str, argc, Args};
+pub use crate::env::{count as env_count, env as env_var, env_str as env_var_str, get as getenv};
 pub use crate::console::Writer;
 pub use crate::syscall::{
-    brk, ckm_audit_read, ckm_component_state, ckm_op_name, ckm_op_required_caps, ckm_policy_query,
+    bind, brk, ckm_audit_read, ckm_component_state, ckm_op_name, ckm_op_required_caps, ckm_policy_query,
     ckm_record_detail, ckm_record_gid, ckm_record_is_deny, ckm_record_need, ckm_record_op,
     ckm_record_pid, ckm_record_seq, ckm_record_uid, close, component_abi_kernel, component_id,
     component_kind, component_kind_name, component_priority, component_state, component_state_name,
-    component_version_code, dirent_is_dir, dirent_name, dirent_size, execve, exit, fork, getdents,
-    getpid, getprocs, mmap, mprotect, munmap, nanosleep, open, procinfo_name, procinfo_pid,
+    component_version_code, dirent_is_dir, dirent_name, dirent_size, execve, execve_env, exit, fork,
+    getdents, getpid, getprocs, mmap, mmap_file, mmap_with_offset, mprotect, munmap, nanosleep,
+    net_config, open, raw6, procinfo_name, procinfo_pid, recvfrom, sendto, socket,
     procinfo_ppid, procinfo_state, read, storage_assign_letter, storage_mount, storage_rescan,
     storage_unmount, storage_volumes, volume_disk, volume_free_bytes, volume_fs, volume_health,
     volume_id, volume_label, volume_label_truncated, volume_letter, volume_letter_str,
@@ -75,7 +79,9 @@ pub use crate::syscall::{
     CKM_OP_STORAGE_LETTER, CKM_OP_STORAGE_MOUNT, CKM_OP_STORAGE_RESCAN, CKM_OP_STORAGE_UNMOUNT,
     CKM_OP_TXN_COMMIT, CKM_OP_TXN_ROLLBACK, CKM_PREFIX_BIN, CKM_PREFIX_ETC, CKM_PREFIX_INIT,
     CKM_PREFIX_LIB, COMPONENT_ID_MAX, COMPONENT_RECORD_SIZE, DIRENT_NAME_MAX, DIRENT_SIZE, EACCES,
-    EAGAIN, EBADF, ECHILD, EFAULT, EISDIR, EINVAL, ENOENT, ENOMEM, ENOSPC, ENOSYS, EPERM,
+    EADDRINUSE, EADDRNOTAVAIL, EAFNOSUPPORT, EAGAIN, EBADF, ECHILD, EFAULT, EHOSTUNREACH, EINVAL,
+    EISDIR, EMSGSIZE, ENETDOWN, ENODEV, ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTCONN, ENOTSOCK,
+    EOPNOTSUPP, EPERM, EPROTONOSUPPORT,
     MAP_ANONYMOUS, MAP_PRIVATE, MAX_COMPONENTS, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY,
     PROCINFO_NAME_MAX, PROCINFO_SIZE, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE, STDERR, STDIN,
     STDOUT, STORAGE_LETTER_NONE, STORAGE_MOUNT_RDONLY, STORAGE_RESCAN_ALL, VOLUME_FREE_UNKNOWN,
@@ -84,6 +90,12 @@ pub use crate::syscall::{
 
 // CSS-3：Windows 式路径（`C:\x`）→ POSIX 路径的重写。用户程序用 `libc::path::resolve`。
 pub use crate::path::{is_windows, resolve as resolve_windows_path, resolve_str};
+
+// v1.0：UDP socket 的用户态形状（地址与网络配置）。
+pub use crate::socket::{
+    NetConfig, SockAddrIn, AF_INET, AF_UNSPEC, INADDR_ANY, INADDR_BROADCAST, IPPROTO_IP,
+    IPPROTO_TCP, IPPROTO_UDP, PORT_ANY, SOCK_DGRAM, SOCK_STREAM, UDP_PAYLOAD_MAX,
+};
 
 /// 卷表缓冲的默认容量（内核 `storage::MAX_VOLUMES` = 16 条）。
 pub const MAX_VOLUMES: usize = 16;
@@ -109,15 +121,17 @@ global_asm!(
     "_start:",
     "xor ebp, ebp",              // 栈回溯终止
     "and rsp, -16",              // SysV：call 前保持 16 字节对齐（栈顶本就对齐，这里是防御）
-    "call cer_start",            // rdi = argc，rsi = argv（内核已放好）
+    "mov rcx, r10",              // 第 4 个 C 参数 = envp（envp 放在 r10，因为 rcx 在 sysret 里是返回 RIP）
+    "call cer_start",            // rdi = argc，rsi = argv，rdx = envc，rcx = envp
     "ud2",                       // cer_start 不返回；到达这里说明入口 ABI 被破坏
     ".size _start, . - _start",
 );
 
-/// 用户程序的总入口：记录 `argc`/`argv` → 调用用户 `main` → `exit`。不返回。
+/// 用户程序的总入口：记录 `argc`/`argv`/`envc`/`envp` → 调用用户 `main` → `exit`。不返回。
 #[no_mangle]
-pub extern "C" fn cer_start(argc: u64, argv: u64) -> ! {
+pub extern "C" fn cer_start(argc: u64, argv: u64, envc: u64, envp: u64) -> ! {
     args::set(argc, argv);
+    env::set(envc, envp);
     // SAFETY: `main` 由用户程序提供，链接期保证存在（缺失就是未定义符号）。
     let code = unsafe { main() };
     exit(code)

@@ -76,9 +76,9 @@ sched: round-robin wrap PASS
 | 进程状态 | 同上 | `ProcState::{Ready, Running, Zombie}`：`fork` 后子进程是 Ready，`wait4` 恢复它变 Running，`exit` 变 Zombie，`wait4` 取走退出码后释放槽位。`comm` 与状态分开：`create` 用调试名填充，`execve` 成功后把它改写成程序名（`/bin/ls` → `ls`），因此 `ps` 看到的是程序而不是 `"exec"` |
 | 每进程内核栈 | 同上 | 64 KiB × `MAX_PROC`；`TSS.RSP0` 与 `CER_SYSCALL_STACK_TOP` 指向同一个栈顶（syscall 与 ring3 中断共用） |
 | `fork` | `kernel/src/syscall/process.rs` | 复制地址空间（`UserSpace::clone_for_fork`）+ 克隆当前用户帧（`rax = 0`），父进程返回子进程 PID |
-| `execve` | 同上 | 新地址空间 + 新 `argv` 用户栈 + 新帧；**先切 CR3 再 Drop 旧地址空间**，成功后不返回 |
+| `execve` | 同上 | 新地址空间 + 新 `argv`/`envp` 用户栈 + 新帧；**先切 CR3 再 Drop 旧地址空间**，成功后不返回 |
 | `wait4` | 同上 | 「延迟调度」：子进程在父进程等待时被恢复运行，结束后回收其地址空间并返回退出码 |
-| `argc`/`argv` | `kernel/src/syscall/process.rs::build_user_frame` | 字符串 + 指针数组写到新进程用户栈，入口寄存器 `rdi = argc` / `rsi = argv`（`libc::args`） |
+| `argc`/`argv`、`envc`/`envp` | `kernel/src/syscall/process.rs::build_user_frame` | 字符串 + 指针数组写到新进程用户栈，入口寄存器 `rdi = argc` / `rsi = argv` / `rdx = envc` / `r10 = envp`（`libc::args`、`libc::env`）；`envp` v1.0 第二步落地，`execve` 默认继承父环境 |
 | 进程表快照 | `kernel/src/syscall/process.rs::sys_getprocs` | v0.9 第五步：定长 40 字节记录（`pid`/`ppid`/`state`/`comm`）写进用户缓冲，按槽位顺序；编号 **256**（Cerlesse 扩展号段），`user/ps` 的落点 |
 
 **为什么是每进程内核栈**（这是整个改动的关键）：父进程停在 `sys_wait` 里时，子进程的
@@ -243,4 +243,5 @@ IPC 是本阶段最后一块。按规划顺序，现在应先完成 pipe 骨架�
 | 2026-10-11 | **进程模型升级为 v0.9 的硬阻塞点**：1.3 明确 `fork`/`execve`/`wait4` 与进程对象仍未实现，并记录「不能靠 syscall 内嵌套 `enter_ring3` 绕过」的原因（用户上下文槽/陷入栈全局唯一）与影响面（Shell 只能跑内建命令） |
 | 2026-10-11 | **v0.9 第三步：进程对象 + `fork`/`execve`/`wait4`**（本节新增 1.4）—— `process/process.rs` 从「最小登记」换成真正的 PCB（地址空间 / 用户帧 / 每进程 64 KiB 内核栈 + 栈底哨兵 / `return_to` / `Ready|Running|Zombie`）、新增 `kernel/src/syscall/process.rs`（fork 复制地址空间与当前帧、execve 换映像并重建 argv 用户栈、wait4 延迟调度 + 回收）、`trampoline` 改为按进程切换（CR3 / TSS.RSP0 / syscall 栈顶 / 当前进程下标）；记录两条踩坑（debug 构建下 16 KiB 内核栈静默溢出踩坏 `.bss` 帧分配器；退出时必须先恢复 CR3 再 Drop 地址空间）；新增 `make test-proc`（8 项断言 + 4 条正则，含 PID 一致性反向引用与帧全回收）；1.3 中该阻塞点标记为已完成 |
 | 2026-10-11 | **v0.9 第五步：进程表可被用户态枚举** —— PCB 新增定长 `comm: [u8; 16]`（`create` 用调试名填充，`execve` 成功后改写为程序名，否则 `ps` 看到的永远是 `"exec"`）；新增 `syscall/process.rs::sys_getprocs`（编号 **256**，定长 40 字节记录 `pid`/`ppid`/`state`/`comm`，按槽位顺序）与 `user/ps` → `/bin/ps`（1.4 表格同步） |
+| 2026-10-12 | **v1.0 第二步：`execve` 传递环境变量 `envp`** —— `syscall/process.rs::sys_exec` 新增 `args[4]`/`args[5]`（`envp_ptr`/`envc`，与 `argv` 同一套指针+长度数组与区间校验），`build_user_frame` 在 `argv` 块下方再写 `envp` 字符串 + 指针数组（各有独立栈预算），`UserFrame::new_user` 用 `rdx`/`r10` 传 `envc`/`envp`；顶层程序（`user.rs::DEFAULT_ENV`）注入默认环境，`libc::execve` 默认继承、`execve_env` 可替换，Shell 新增 `env` 内建；1.4 表格同步 |
 | 2026-10-08 | 本次 docs 迭代统一文档顶部元信息（阶段 / 最后更新 / 状态）与修订记录，保持与 DEVELOPMENT.md 与索引文档描述一致 |

@@ -52,7 +52,7 @@ const PATH_MAX: u64 = abi::limits::PATH_MAX;
 ///
 /// # Safety
 /// `space` 必须是当前生效的用户地址空间；`buf_ptr` 必须可写。
-pub unsafe fn sys_getdents(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_getdents(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (path_ptr, path_len, buf_ptr, buf_len) = (args[0], args[1], args[2], args[3]);
     if path_len == 0 || path_len > PATH_MAX {
         return EINVAL;

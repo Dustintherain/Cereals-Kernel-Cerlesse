@@ -86,9 +86,9 @@ make test-orch-userland  # 只跑标记 userland 的编排场景
 
 | 目标 | 用户态侧证据 |
 | ---- | ---- |
-| `make test-user`（91 项） | `/init` 从 RAMFS 装载、`exit(42)`、用户堆、`mprotect`（`PROT_NONE`/`RX` 转换 + 真的执行机器码）、页帧回收、隔离探针 |
+| `make test-user`（111 项） | `/init` 从 RAMFS 装载、`exit(42)`、用户堆（含 `mmap` 的 `offset` 正负例）、**文件映射**（只读私有，`offset` 生效）、`mprotect`（`PROT_NONE`/`RX` 转换 + 真的执行机器码）、页帧回收、隔离探针 |
 | `make test-shell`（11 项） | 键盘 → 行缓冲 → `/bin/sh` → 内建命令 |
-| `make test-proc`（8 项 + 4 正则） | `fork`/`execve`/`wait4` + `argv`（`/bin/hello`、`ENOENT` → 127） |
+| `make test-proc`（26 项 + 4 正则） | `fork`/`execve`/`wait4` + `argv`/`envp`（`/bin/hello` 打印 `envc`/`env`、Shell `env` 内建、`ENOENT` → 127） |
 | `make test-programs`（17 项 + 5 正则） | `/bin/{ls,cat,echo,ps}` 真的被 exec 起来 |
 | `make test-dyn`（10 项） | `PT_INTERP` + `libgreet.so` + `RELATIVE`/`JUMP_SLOT` |
 | `make test-kernel-only`（7 项） | **反向**证据：没有用户态镜像时内核照样启动并进入诊断模式 |

@@ -35,7 +35,7 @@ use crate::syscall::address_space::UserSpace;
 /// `arg` 是 op 相关的细节（例如 `fs_write` 传受保护前缀下标），它会进证据行的
 /// `detail`；第一版**没有**参数能指定「查别的主体」—— 这是刻意的：
 /// 查询接口若能被用来枚举别人的权限，本身就是一类信息泄露。
-pub unsafe fn sys_ckm_policy_query(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_ckm_policy_query(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (op_code, arg, out_ptr, out_len, reserved) = (args[0], args[1], args[2], args[3], args[4]);
     if reserved != 0 {
         return EINVAL;
@@ -77,7 +77,7 @@ pub unsafe fn sys_ckm_policy_query(args: &[u64; 5], space: *const UserSpace) -> 
 /// （与 `storage_volumes` 同一约定）。
 ///
 /// [`CAP_AUDIT_READ`]: crate::security::capability::CAP_AUDIT_READ
-pub unsafe fn sys_ckm_audit_read(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_ckm_audit_read(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (buf_ptr, buf_len, since_seq, count_ptr, reserved) = (args[0], args[1], args[2], args[3], args[4]);
     if reserved != 0 {
         return EINVAL;
@@ -123,7 +123,7 @@ pub unsafe fn sys_ckm_audit_read(args: &[u64; 5], space: *const UserSpace) -> i6
 /// 按**确定性顺序**（`kind` 升序 → `priority` 降序 → `id` 字节序升序）导出 64 字节
 /// 记录；缓冲装不下整张表返回 `-ENOSPC`（**要么写完整记录，要么明确失败**，
 /// 不做半条记录的截断）。返回写入条数。
-pub unsafe fn sys_ckm_component_state(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_ckm_component_state(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (buf_ptr, buf_len, count_ptr, a, b) = (args[0], args[1], args[2], args[3], args[4]);
     if a != 0 || b != 0 {
         return EINVAL;

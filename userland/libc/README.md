@@ -1,7 +1,8 @@
 # libc（最小用户态运行时）
 
 - 版本：v0.6 建立 / **v0.7 补齐文件 syscall** / **v0.9 第一步补齐用户堆** / **v0.9 第二步补齐 `stdin`** /
-  **v0.9 第三步补齐进程调用与 `argc`/`argv`** / **纯内核化：随用户态移入独立 workspace**（现位于 `userland/libc/`）
+  **v0.9 第三步补齐进程调用与 `argc`/`argv`** / **v1.0 第二步补齐 `envp` 与 `mmap` 的 `offset`** /
+  **纯内核化：随用户态移入独立 workspace**（现位于 `userland/libc/`）
 - 状态：✅ 已实现（2026-10-11，随 `make test-user` **61 项** + `make test-shell` **11 项** + `make test-proc` **8 项 + 4 正则**断言实测通过；
   `user/hello` 作为 RAMFS 上的 `/init`、`user/shell` 作为 `/bin/sh`、`user/hello-bin` 作为 `/bin/hello`
   （**由 Shell `fork` + `execve` 起来**），三者都经 ELF Loader 装载并跑在 ring3）
@@ -17,9 +18,11 @@
 
 | 组成 | 内容 |
 | ---- | ---- |
-| `syscall` | 系统调用号常量 + 裸入口 `raw(nr, a1..a5)` + `write` / `read` / `open` / `close` / `getpid` / `nanosleep` / `exit` / `brk` / `mmap` / `munmap` / `fork` / `execve` / `wait4` |
+| `syscall` | 系统调用号常量 + 裸入口 `raw(nr, a1..a5)`（等价 `raw6(nr, a1..a6)`，第 6 参数 `r9`）+ `write` / `read` / `open` / `close` / `getpid` / `nanosleep` / `exit` / `brk` / `mmap`（含 `mmap_with_offset`）/ `munmap` / `fork` / `execve`（含 `execve_env`）/ `wait4` / `socket` / `bind` / `sendto` / `recvfrom` / `net_config`（v1.0 第四步） |
 | `args` | `argc()` / `arg(i)` / `arg_str(i)` / `Args`：入口寄存器里的 `rdi`/`rsi` 由 `_start` 存进来（v0.9 第三步） |
+| `env` | `env_count()` / `env_var(i)` / `getenv(name)` / `env::Env`：入口寄存器里的 `rdx`/`r10`（`_start` 把 `r10` 搬进 `rcx`）由 `cer_start` 存进来；`execve` 默认继承（v1.0 第二步） |
 | `heap` | `#[global_allocator]`（bump over `mmap`，64 KiB 块）—— 用户程序因此可以用 `Vec`/`String`/`Box`（v0.9 第一步） |
+| `socket` | `SockAddrIn`（`new`/`any`/`port`/`addr`）与 `NetConfig`（`ip`/`gateway`/`mac`）：16 字节 `sockaddr_in` 与 `net_config` 记录的用户态形状；端口/地址用网络字节序（v1.0 第四步） |
 | `console` | `print!` / `println!`（固定 256 字节缓冲，**一次宏调用 = 一次 `write`**） |
 | `_start` | `global_asm!` 放在 `.text.start`：`_start` → 用户 `main` → `exit(main())` |
 | 运行时支撑 | `#[panic_handler]`（打 stderr 后 `exit(101)`）、`no_std`、errno / `O_*` 常量 |
@@ -117,7 +120,7 @@ pub extern "C" fn main() -> i32 {
 不用启动 QEMU 就能在改坏链接脚本时立刻发现。
 
 尚未实现的调用：**号已定义的调用已全部落地**（`mprotect` 是最后一个，见 5.1）；
-环境变量（`envp`）、文件映射（`mmap` 加 offset）、用户态抢占与**完整**动态链接属后续版本。
+**可写**文件映射（`MAP_SHARED`/写回）、用户态抢占与**完整**动态链接属后续版本。
 
 ## 5. 用户堆（v0.9 第一步）
 
@@ -143,7 +146,8 @@ v.push(1);
 | 调用 | 语义 | 失败 |
 | ---- | ---- | ---- |
 | `brk(addr)` | `addr = 0` 查询堆顶；否则页对齐增长/收缩（256 KiB 窗口） | **不返回错误**：返回原值（用 `ret < addr` 判断） |
-| `mmap(len, prot, flags)` | 只收 `MAP_PRIVATE\|MAP_ANONYMOUS`，`fd` 固定 -1，**无 offset 参数**；first-fit；新页全零 | `-EINVAL`（位非法/文件映射/`PROT_WRITE\|PROT_EXEC`）、`-ENOMEM`（超窗口） |
+| `mmap(len, prot, flags)` / `mmap_with_offset(len, prot, flags, offset)` | 匿名映射：`MAP_PRIVATE\|MAP_ANONYMOUS`、`fd` 固定 -1、`offset=0`；first-fit；新页全零 | `-EINVAL`（位非法/`PROT_WRITE\|PROT_EXEC`/非 0 `offset`）、`-ENOMEM`（超窗口） |
+| `mmap_file(fd, len, prot, flags, offset)` | **文件映射**（v1.0 第三步）：`fd ≥ 3` 可读、`MAP_PRIVATE`、只读、`offset` 页对齐；把文件 `[offset, offset+len)` 映射进来 | `-EINVAL`（非页对齐 `offset`/写权限/`MAP_SHARED`/无效 fd） |
 | `mprotect(addr, len, prot)` | 改**已映射**页的保护属性（v1.0）：页对齐、同一窗口、全段已映射；`PROT_NONE` 关页但留住页帧 | `-EINVAL`（对齐/长度/位/跨窗口/有页未映射/目标为栈） |
 | `munmap(addr, len)` | 整段归还（要求页对齐且全段已映射） | `-EINVAL` |
 
@@ -212,7 +216,8 @@ loop {
 | 调用 | 返回 | 说明 |
 | ---- | ---- | ---- |
 | `fork() -> isize` | 父进程：子进程 PID；子进程：`0`；失败：负 errno（进程表满 `EAGAIN`） | 地址空间与**当前寄存器帧**一起复制，子进程从同一条用户指令继续 |
-| `execve(path, argv: &[&str]) -> isize` | **成功不返回**；失败：`-ENOENT` / `-E2BIG` / `-EFAULT` / `-EINVAL` | 换映像 + 换地址空间，`argv` 写进新进程的用户栈 |
+| `execve(path, argv: &[&str]) -> isize` | **成功不返回**；失败：`-ENOENT` / `-E2BIG` / `-EFAULT` / `-EINVAL` | 换映像 + 换地址空间，`argv` 与**当前环境**（`libc::env`）写进新进程的用户栈（默认继承） |
+| `execve_env(path, argv: &[&str], envp: &[&str]) -> isize` | 同上 | 用 `envp` 显式替换新映像的环境（`NAME=VALUE`） |
 | `wait4(pid: i64) -> isize` | 子进程退出码（可为负）；非直接子进程：`ECHILD` | 运行并**回收**子进程（地址空间整棵归还） |
 
 标准写法原样可用（`user/shell` 的 `cmd_external` 就是这么写的）：
@@ -229,8 +234,9 @@ let code = wait4(pid);
 println!("exit code={}", code);
 ```
 
-**参数在入口寄存器里**（不是 Linux 的「压在用户栈顶」）：`_start` 的 `rdi = argc`、
-`rsi = argv`，由 `cer_start` 存进 `libc::args`。用户程序侧：
+**参数与环境在入口寄存器里**（不是 Linux 的「压在用户栈顶」）：`_start` 的 `rdi = argc`、
+`rsi = argv`、`rdx = envc`、`r10 = envp`（`_start` 把 `r10` 搬进 `rcx` 再 `call cer_start`），
+由 `cer_start` 分别存进 `libc::args` 与 `libc::env`。用户程序侧：
 
 ```rust
 use libc::{arg_str, argc, println};
@@ -315,3 +321,39 @@ if n < 0 {
 
 注意：缓冲至少要有**一条记录**（64 字节），否则内核返回 `-EINVAL`；
 枚举顺序是**确定性的**（`disk` 升序 → `part` 升序 → `id` 字节序升序），因此同一镜像两次调用逐字节相同。
+
+
+## 10. UDP 套接字（v1.0 第四步）
+
+`socket` / `bind` / `sendto` / `recvfrom` 是 BSD 风格的 UDP 最小集（内核只支持 `AF_INET` +
+`SOCK_DGRAM`，见 `docs/syscall.md` 3.14）。地址用 16 字节 `sockaddr_in`，
+端口与地址是**网络字节序**；本层给 [`SockAddrIn`] 与 [`NetConfig`] 两个类型，不要自己按偏移拼字节。
+
+| 调用 | 说明 |
+| ---- | ---- |
+| `socket(domain, ty, protocol) -> isize` | `AF_INET` + `SOCK_DGRAM`；返回 fd（与文件共用编号空间） |
+| `bind(fd, &SockAddrIn) -> isize` | `SockAddrIn::any(0)` 分配临时端口；端口被占 `EADDRINUSE` |
+| `sendto(fd, buf, &SockAddrIn) -> isize` | 返回**载荷字节数**；套接字未绑定时隐式分配端口 |
+| `recvfrom(fd, buf, Some(&mut SockAddrIn)) -> isize` | 回填发送方地址；2 秒无数据 `EAGAIN`，未绑定 `EINVAL` |
+| `net_config(&mut NetConfig) -> isize` | 内核 DHCP 协商到的本机地址/网关/MAC；无网卡 `ENODEV` |
+
+参考实现是 [user/hello](../user/hello) 的 `socket_selftest`：
+
+```rust
+use libc::{socket, bind, sendto, recvfrom, net_config, SockAddrIn, NetConfig, AF_INET, SOCK_DGRAM};
+
+let mut cfg = NetConfig::new();
+if net_config(&mut cfg) < 0 {
+    // 没有网卡：跳过网络部分（不当作失败）
+}
+let fd = socket(AF_INET, SOCK_DGRAM, 0);
+let _ = bind(fd as i32, &SockAddrIn::any(0));
+let dst = SockAddrIn::new([10, 0, 2, 2], 9);
+let _ = sendto(fd as i32, b"ping", &dst);
+let mut buf = [0u8; 64];
+let mut src = SockAddrIn::default();
+let n = recvfrom(fd as i32, &mut buf, Some(&mut src));
+```
+
+`read`/`write` 一个 UDP 套接字返回 `ENOTCONN`（本内核没有 `connect`）—— 用 `sendto`/`recvfrom`。
+TCP、`connect`/`listen`/`accept`、`MSG_*` 尚未实现（明确拒绝）。

@@ -19,7 +19,7 @@
 | ---- | ---- |
 | 指令 | `syscall`（`EFER.SCE` + `IA32_STAR` / `IA32_LSTAR` / `IA32_FMASK`），返回 `sysretq` |
 | 调用号 | `rax` |
-| 参数 | `rdi, rsi, rdx, r10, r8`（最多 5 个，与 Linux x86_64 一致） |
+| 参数 | `rdi, rsi, rdx, r10, r8, r9`（前 5 个与 Linux x86_64 一致；`r9` 是 v1.0 新增的第 6 个参数：`mmap` 的 `offset`、`execve` 的 `envp`） |
 | 返回值 | `rax`；**负数 = `-errno`** |
 | 被破坏的寄存器 | 仅 `rax`、`rcx`、`r11`；其余寄存器（含 `rdi/rsi/rdx/r10/r8/r9`）**保持进入前的值**（入口汇编保存/恢复） |
 | 入口栈 | 内核入口切到**专用系统调用栈**（`syscall` 指令不切栈）；返回前恢复 |
@@ -33,7 +33,7 @@
 编号沿用 **Linux x86_64** 语义，便于将来直接运行现成用户态程序。
 `0..=255` 沿用 Linux 语义，`256..` 是 Cerlesse 扩展号段（256 = `getprocs`，257–260 是 CKM 号段
 —— 257/258/259 已在 CKM-1 实现，260 预留给 CKM-4；261–266 由 CSS 使用，其中 261/262/263/264/265
-已实现、只有 266 `storage_format` 待 CSS-4）；号段上限 `SYS_MAX = 267`；
+已实现、只有 266 `storage_format` 待 CSS-4；267 = `net_config`，v1.0 新增）；号段上限 `SYS_MAX = 268`；
 **号越界**与**号合法但未实现**是两种可区分的失败（前者 `parse` 返回 `None`，后者落在公共 ENOSYS 桩，均返回 `-ENOSYS`）。
 
 | 号 | 名称 | 状态 | 说明 |
@@ -42,12 +42,16 @@
 | 1 | `write` | ✅ | fd 1/2 写串口，fd ≥ 3 写文件 |
 | 2 | `open` | ✅ | 打开/创建文件，返回 fd（≥ 3） |
 | 3 | `close` | ✅ | 关闭动态 fd |
-| 9 | `mmap` | ✅ | 匿名私有映射（无 offset） |
+| 9 | `mmap` | ✅ | 匿名私有映射；第 6 参数 `offset`（`r9`）+ 文件映射（只读私有，v1.0） |
 | 10 | `mprotect` | ✅ | 改写**已映射**页的保护属性（`PROT_NONE` = ring3 不可访问但帧保留） |
 | 11 | `munmap` | ✅ | 整段归还匿名映射 |
 | 12 | `brk` | ✅ | 调整用户堆顶（Linux 语义） |
 | 35 | `nanosleep` | ✅ | 睡眠 N 个 PIT tick（100Hz） |
 | 39 | `getpid` | ✅ | 当前进程 PID |
+| 41 | `socket` | ✅ | 建 UDP 套接字（`AF_INET` + `SOCK_DGRAM`），返回 fd（v1.0） |
+| 44 | `sendto` | ✅ | 发一个 UDP 数据报（返回载荷字节数，v1.0） |
+| 45 | `recvfrom` | ✅ | 收一个 UDP 数据报并回填发送方地址（v1.0） |
+| 49 | `bind` | ✅ | 绑本地地址/端口（`port = 0` 分配临时端口，v1.0） |
 | 57 | `fork` | ✅ | 复制当前进程 |
 | 59 | `execve` | ✅ | 换映像（成功后不返回） |
 | 60 | `exit` | ✅ | 结束进程并交回退出码 |
@@ -64,11 +68,12 @@
 | 264 | `storage_assign_letter` | ✅ | 分配/取消盘符（需 `CAP_STORAGE_ADMIN`；映射落 CKM 状态区 `storage/letters`，CSS-3） |
 | 265 | `storage_rescan` | ✅ | 重扫设备的分区与文件系统（CSS-1；设备不存在 `-ENODEV`） |
 | 266 | `storage_format` | ENOSYS | CSS-4 待实现（扩展号段） |
+| 267 | `net_config` | ✅ | 导出 DHCP 协商到的本机地址/网关/MAC，定长 16 字节记录（v1.0，扩展号段） |
 | 其他 | — | ENOSYS | 号合法但未实现：查表命中 ENOSYS 桩；常见者会打印 `syscall: ENOSYS nr=… name=…` |
 
 ## 2. 系统调用逐条说明
 
-参数顺序即寄存器顺序 `rdi, rsi, rdx, r10, r8`。
+参数顺序即寄存器顺序 `rdi, rsi, rdx, r10, r8, r9`（`r9` = 第 6 参数，v1.0 起）。
 
 ### 2.1 `read`（nr=0）
 
@@ -121,7 +126,8 @@ isize close(i32 fd)   // libc: close(fd: i32) -> isize
 isize mmap(usize len, i32 prot, i32 flags)   // libc: mmap(len: usize, prot: i32, flags: i32) -> isize
 ```
 
-- **只支持私有匿名映射**：`flags` 必须含 `MAP_PRIVATE|MAP_ANONYMOUS`，`fd` 固定 `-1`，**没有 offset 参数**（ABI 5 参数）。
+- **匿名映射**：`flags` 含 `MAP_PRIVATE|MAP_ANONYMOUS`，`fd = -1`，`offset = 0`（非 0 `-EINVAL`）。
+- **文件映射（v1.0 第三步）**：`fd ≥ 3` 且可读、`flags = MAP_PRIVATE`、**只读**（拒绝 `PROT_WRITE`/`PROT_EXEC`）、`offset` **页对齐**；把文件 `[offset, offset+len)` 拷进新映射（文件尾之后补零）。`MAP_SHARED` 未实现。
 - `prot` 允许 `PROT_READ`(0x1) / `PROT_WRITE`(0x2) / `PROT_EXEC`(0x4) / `PROT_NONE`(0x0，v1.0 起：映射存在但 ring3 不可访问，可由 `mprotect` 启用)；拒绝 `PROT_WRITE|PROT_EXEC`（W^X）。
 - 返回页对齐地址（> 0）或负 errno；**新页保证全零**；窗口 256 KiB，first-fit。
 - 错误：`EINVAL`（位非法/文件映射）、`ENOMEM`（超窗口/无空闲帧）。
@@ -273,6 +279,38 @@ isize ckm_component_state(u8 *buf, usize buf_len, u64 *out_count, 0, 0)
 记录的权威定义在内核（`kernel/src/ckm/{audit,state}.rs`），用户态只镜像一次解析器
 （`libc::ckm_record_*` / `component_*`），**不自己算偏移**。
 
+### 2.18 `socket` / `bind` / `sendto` / `recvfrom`（nr=41/49/44/45，v1.0）
+
+UDP 套接字最小集（`AF_INET` + `SOCK_DGRAM`）。地址用 16 字节 `sockaddr_in`
+（`family` 主机序，`port`/`addr` **网络字节序**）：
+
+```text
+0  2  sin_family (u16, = AF_INET / 2)   2  2  sin_port (u16 BE)
+4  4  sin_addr   (u32 BE)               8  8  sin_zero (= 0)
+```
+
+| 调用 | 参数 | 返回 / 拒绝 |
+| ---- | ---- | ---- |
+| `socket` | `(domain, type, protocol)` | fd（≥ 3）；`AF_* != AF_INET` → `-EAFNOSUPPORT`；`type & SOCK_TYPE_MASK != SOCK_DGRAM` → `-EPROTONOSUPPORT`；表满 / fd 用尽 → `-ENOSPC` |
+| `bind` | `(fd, addr_ptr, addr_len)` | `0`；端口被占 → `-EADDRINUSE`；外机地址 → `-EADDRNOTAVAIL`；非套接字 fd → `-ENOTSOCK` |
+| `sendto` | `(fd, buf, len, flags, addr_ptr, addr_len)` | 载荷字节数；`flags != 0` → `-EOPNOTSUPP`；`len > 1472` → `-EMSGSIZE`；无网卡/未 DHCP → `-ENETDOWN` |
+| `recvfrom` | `(fd, buf, len, flags, addr_ptr, addr_len_ptr)` | 拷入字节数；未 `bind` → `-EINVAL`；2 秒超时 → `-EAGAIN` |
+
+`addr_len` 至少 16；`recvfrom` 的 `addr_len_ptr`（`socklen_t` = u32）是「缓冲长度进、实际长度出」。
+套接字与文件**共用一个 fd 编号空间**，`close` 对两者都有效；`read`/`write` 一个 UDP 套接字返回
+`-ENOTCONN`（没有 `connect`）。内核同步轮询收包：目的端口不匹配的数据报被丢弃（无等待队列）。
+详见 `docs/syscall.md` 3.14。
+
+### 2.19 `net_config`（nr=267，v1.0，Cerlesse 扩展号）
+
+`net_config(buf_ptr, buf_len)`：把内核 DHCP 协商到的配置写进 16 字节记录：
+
+```text
+0  4  本机 IPv4 (BE)    4  4  网关 IPv4 (BE)    8  6  本机 MAC    14  2  保留(=0)
+```
+
+返回 16；`buf_len < 16` → `-EINVAL`；没有网卡 / DHCP 尚未成功 → `-ENODEV`。
+
 ## 3. errno 常量
 
 | 数值 | 名称 | 含义 | 用户态 `libc` 导出 |
@@ -309,13 +347,17 @@ isize ckm_component_state(u8 *buf, usize buf_len, u64 *out_count, 0, 0)
 | `open` | `fn open(path: &str, flags: i32) -> isize` | 返回 fd ≥ 3 或负 errno |
 | `close` | `fn close(fd: i32) -> isize` | |
 | `brk` | `fn brk(addr: u64) -> u64` | Linux 语义，失败返回原值 |
-| `mmap` | `fn mmap(len: usize, prot: i32, flags: i32) -> isize` | 匿名私有，无 offset |
+| `mmap` | `fn mmap(len: usize, prot: i32, flags: i32) -> isize` | 匿名私有（`offset` 固定 0） |
+| `mmap_with_offset` | `fn mmap_with_offset(len, prot, flags, offset: u64) -> isize` | 带 `offset`（`r9`）；匿名映射要求 `offset=0` |
+| `mmap_file` | `fn mmap_file(fd: i32, len, prot, flags, offset: u64) -> isize` | 只读私有文件映射（`MAP_PRIVATE`、`PROT_READ`、`offset` 页对齐） |
 | `mprotect` | `fn mprotect(addr: u64, len: usize, prot: i32) -> isize` | 改写已映射页的保护属性（v1.0） |
 | `munmap` | `fn munmap(addr: u64, len: usize) -> isize` | |
 | `getpid` | `fn getpid() -> u64` | |
 | `nanosleep` | `fn nanosleep(ticks: u64) -> isize` | 1 tick = 10ms |
 | `fork` | `fn fork() -> isize` | 父 = 子 PID，子 = 0 |
-| `execve` | `fn execve(path: &str, argv: &[&str]) -> isize` | 成功不返回 |
+| `execve` | `fn execve(path: &str, argv: &[&str]) -> isize` | 成功不返回；**继承当前环境** |
+| `execve_env` | `fn execve_env(path: &str, argv: &[&str], envp: &[&str]) -> isize` | 成功不返回；显式替换环境 |
+| `getenv` / `env_count` / `env_var` | `fn getenv(name: &str) -> Option<&'static str>` 等 | 环境变量（`libc::env`，v1.0） |
 | `wait4` | `fn wait4(pid: i64) -> isize` | 返回退出码或 `ECHILD` |
 | `getdents` | `fn getdents(path: &str, buf: &mut [u8]) -> isize` | 定长 88 字节记录（`dirent_*` 解析器） |
 | `getprocs` | `fn getprocs(buf: &mut [u8]) -> isize` | 定长 40 字节记录（`procinfo_*` 解析器） |
@@ -325,6 +367,12 @@ isize ckm_component_state(u8 *buf, usize buf_len, u64 *out_count, 0, 0)
 | `storage_unmount` | `fn storage_unmount(point: &str) -> isize` | 需 `CAP_STORAGE_ADMIN`（CSS-3） |
 | `storage_assign_letter` | `fn storage_assign_letter(vol_id: &str, letter: u8) -> isize` | `letter = 0` 取消；需 `CAP_STORAGE_ADMIN`（CSS-3） |
 | `path::resolve` / `path::resolve_str` / `path::is_windows` | `(&str, &mut [u8]) -> Result<…, isize>` / `(&str) -> bool` | `C:\x` 查 `storage_volumes` 重写为 POSIX（CSS-3） |
+| `socket` | `fn socket(domain: u16, ty: u32, protocol: u32) -> isize` | `AF_INET` + `SOCK_DGRAM`；返回 fd（v1.0） |
+| `bind` | `fn bind(fd: i32, addr: &SockAddrIn) -> isize` | `SockAddrIn::any(0)` 分配临时端口（v1.0） |
+| `sendto` | `fn sendto(fd: i32, buf: &[u8], dst: &SockAddrIn) -> isize` | 返回载荷字节数（v1.0） |
+| `recvfrom` | `fn recvfrom(fd: i32, buf: &mut [u8], src: Option<&mut SockAddrIn>) -> isize` | 超时 `-EAGAIN`（v1.0） |
+| `net_config` | `fn net_config(cfg: &mut NetConfig) -> isize` | 无网卡 `-ENODEV`（v1.0） |
+| `SockAddrIn` / `NetConfig` | `libc::socket::{SockAddrIn, NetConfig}` | `new`/`any`/`port`/`addr`/`ip`/`gateway`/`mac`（v1.0） |
 | `ckm_policy_query` | `fn ckm_policy_query(op: u16, arg: u64, out: &mut [u8]) -> isize` | `0`/`-EPERM`；48 字节记录（CKM-1） |
 | `ckm_audit_read` | `fn ckm_audit_read(buf: &mut [u8], since_seq: u64, out_count: Option<&mut u64>) -> isize` | 返回**条数**；需 `CAP_AUDIT_READ`（CKM-1） |
 | `ckm_component_state` | `fn ckm_component_state(buf: &mut [u8], out_count: Option<&mut u64>) -> isize` | 64 字节记录 × 32 槽，确定性顺序（CKM-1） |
@@ -340,6 +388,9 @@ isize ckm_component_state(u8 *buf, usize buf_len, u64 *out_count, 0, 0)
 - `mmap`/`mprotect` 保护位：`PROT_NONE = 0x0`、`PROT_READ = 0x1`、`PROT_WRITE = 0x2`、`PROT_EXEC = 0x4`。
 - `mmap` 标志：`MAP_PRIVATE = 0x2`、`MAP_ANONYMOUS = 0x20`。
 - errno：`ENOENT/EBADF/ECHILD/EAGAIN/ENOMEM/EFAULT/EISDIR/EINVAL/ENOSPC/ENOSYS/EPERM/EACCES`（数值见第 3 节）。
+- socket（v1.0）：`AF_INET = 2`、`SOCK_DGRAM = 2`、`IPPROTO_UDP = 17`、`UDP_PAYLOAD_MAX = 1472`、
+  `sockaddr_in` 布局 `SOCKADDR_IN_SIZE = 16`、`NET_CONFIG_SIZE = 16`；errno 追加
+  `ENODEV(-19)/ENOTSOCK(-88)/EMSGSIZE(-90)/EPROTONOSUPPORT(-93)/EOPNOTSUPP(-95)/EAFNOSUPPORT(-97)/EADDRINUSE(-98)/EADDRNOTAVAIL(-99)/ENETDOWN(-100)/ENOTCONN(-107)/EHOSTUNREACH(-113)`。
 - CKM（CKM-1）：能力位 `CAP_CKM_ADMIN = 0x1`、`CAP_CKM_SERVICE = 0x2`、`CAP_FS_SYSTEM_WRITE = 0x4`、
   `CAP_AUDIT_READ = 0x8`、`CAP_STORAGE_ADMIN = 0x10`、`CAP_STORAGE_FORMAT = 0x20`；
   op 枚举 `CKM_OP_FS_WRITE = 1` … `CKM_OP_STORAGE_RESCAN = 16`；
@@ -532,7 +583,7 @@ make clean
 | `test-storage-fixtures` | 夹具结构断言（GPT 主/备表头 + CRC、MBR 四主分区 + EBR 链） | — |
 | `test-storage` | 卷枚举确定性 + 无分区表退化 + 只读原因 + `degraded`（GPT 场景） | 26 |
 | `test-storage-mbr` | MBR 场景：EBR 链 + 未识别文件系统仍可见 | 13 |
-| `test-network` | virtio-net → Ethernet/ARP/IPv4/UDP（DHCP 往返） | 13 |
+| `test-network` | virtio-net → Ethernet/ARP/IPv4/UDP（DHCP 往返）+ ICMP Echo + UDP 套接字最小集（用户态 DHCP 往返） | 30 |
 | `test-dyn` | PT_INTERP + DT_NEEDED + RELATIVE/JUMP_SLOT（内核侧最小动态链接） | 10 |
 | `test-driver` | PCI 枚举 + 驱动挂接 + 扇区读写/负例 | 22 |
 | `test-fat` | 双盘 FAT16/32 读/LFN/跨簇/偏移/EROFS | 21 |
@@ -542,6 +593,7 @@ make clean
 
 | 日期 | 变更 |
 | ---- | ---- |
+| 2026-10-13 | **v1.0 第四步：UDP 套接字最小集** —— 号表新增 41 `socket`/44 `sendto`/45 `recvfrom`/49 `bind` 与 267 `net_config`，`SYS_MAX` 267 → **268**；新增 2.18/2.19（地址/记录布局与逐条语义）；4.1 新增五个封装与 `SockAddrIn`/`NetConfig`，4.2 新增 socket 常量与 errno；第 7 节 `test-network` 15 → **30 项** |
 | 2026-10-12 | **CKM-1（内核级权限控制）**：号表新增 `ckm_policy_query`(257)/`ckm_audit_read`(258)/`ckm_component_state`(259) 与 `ckm_policy_set`(260) 的 ENOSYS 行；新增 2.15/2.16/2.17（op 枚举、48/64 字节记录布局、errno）；4.1/4.2 新增 `libc` 封装、解析器与 `CAP_*`/`CKM_OP_*`/`EPERM`/`EACCES`/记录尺寸常量；号段说明改为「257–259 已实现」；第 7 节新增 `test-ckm`（22 + 2 正则）并标注 `test-user` 包含 CKM 证据 |
 | 2026-10-11 | **CSS-2（VFS 收口）**：5.1 节的 `FileSystem` 补 `caps`/`volume_info`（保守缺省）、`FatFs::open` 的错误类型改为 `OpenError { errno, reason }`、VFS 入口提 `route`/`backend_caps`/`backend_volume_info`、挂载表改为 `backends`+`mounts` 并补 `mount_volume`/`alias_volume`/`umount`；5.3 号表行标注 262–264 的内核落点已先备好 |
 | 2026-10-11 | 创建本文档：汇总系统调用 ABI（寄存器约定/号表/逐条语义）、errno 表、`libc` API、

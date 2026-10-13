@@ -12,7 +12,9 @@
   与 W^X 的「先写后换只执行」因此成立）；
   `make test-user` 91 项 / `make test-shell` 11 项 / `make test-proc` 8 项 + 4 条正则 /
   `make test-programs` 17 项 + 5 条正则 / `make test-dyn` 10 项 / `make test-fs` 21 项 PASS；
-  仍未做：环境变量（`envp`）、**完整**动态链接（用户态 `ld.so`，见 3.9）、文件映射（`mmap` 加 offset）
+  环境变量（`envp`）与 `mmap` 的 `offset` 槽位（syscall ABI 扩到第 6 参数 `r9`）已落地；
+  **文件映射**（只读私有，v1.0 第三步）已落地 —— `mmap` 的 `offset` 真正生效（见 3.13）；
+  仍未做：**完整**动态链接（用户态 `ld.so`，见 3.9）、**可写文件映射**（`MAP_SHARED`）
 - **阶段三（2026-10-12）**：调用号 / `errno` / 标志位 / 记录布局的**权威定义已移入 `abi/` crate**
   （单一事实源）：本文档的号段表与各记录布局由它校对，内核与 `libc` 都引用同一处；
   防漂移命令是 `make abi-check`（序号/号段/记录尺寸/能力位固化）+ `abi/src/record.rs`
@@ -36,7 +38,10 @@ v0.6 与 v0.7 一起构成系统调用 / 用户空间阶段，但两者有清晰
    **内核侧最小动态链接**（见 3.9：`PT_INTERP` + `DT_NEEDED` + `RELATIVE`/`JUMP_SLOT`）。
 7. **v1.0 第一步（已做）**：`mprotect`（见 3.10）—— 已映射页的保护属性可在运行期改写，
    `PROT_NONE` 与 W^X 的「先 `mmap(RW)` 写、再 `mprotect(RX)` 执行」因此成立。
-8. **仍未做**：环境变量（`envp`）、**完整**动态链接（用户态 `ld.so`）、文件映射（`mmap` 加 offset）。
+8. **v1.0 第二步（已做）**：syscall ABI 扩到第 6 参数 `r9` —— 用户态环境变量 `envp`
+   （`execve` 传递 + `libc::env` + Shell `env` 内建）与 `mmap` 的 `offset` 槽位一并落地（见 3.4）。
+9. **v1.0 第三步（已做）**：**文件映射**（`mmap` 只读私有文件映射，`offset` 页对齐）—— `offset` 真正生效（见 3.13）。
+10. **仍未做**：**完整**动态链接（用户态 `ld.so`）、**可写文件映射**（`MAP_SHARED`/写回）。
 
 ## 2. v0.6 实际实现（2026-10-10 落地）
 
@@ -48,8 +53,8 @@ v0.6 与 v0.7 一起构成系统调用 / 用户空间阶段，但两者有清晰
 | ---- | ---- | ---- |
 | 入口指令 | `syscall` → `IA32_LSTAR` = `syscall_entry` | 保存 RIP→`rcx`、RFLAGS→`r11`，**不切栈** |
 | 返回指令 | `sysretq` | CS=`STAR[63:48]+16`、SS=`STAR[63:48]+8` |
-| syscall 号 | `rax` | 越界（≥ `SYS_MAX`=267）返回 `-ENOSYS` |
-| 参数 | `rdi, rsi, rdx, r10, r8` | 与 Linux x86_64 一致，便于以后直接跑现成用户态程序 |
+| syscall 号 | `rax` | 越界（≥ `SYS_MAX`=268）返回 `-ENOSYS` |
+| 参数 | `rdi, rsi, rdx, r10, r8, r9` | 前 5 个与 Linux x86_64 一致；第 6 个（`r9`）是 v1.0 新增的扩展槽（`mmap` 的 `offset`、`execve` 的 `envp`） |
 | 返回值 | `rax` | 负数 = `-errno`（如 `-ENOSYS` = -38、`-EFAULT` = -14） |
 | 进入内核时的 RFLAGS 掩码 | `IA32_FMASK` = IF\|DF\|TF = `0x700` | 内核在关中断下运行 syscall handler |
 
@@ -129,18 +134,23 @@ v0.6 与 v0.7 一起构成系统调用 / 用户空间阶段，但两者有清晰
 | `sleep`（nanosleep） | 35 | ✅ v0.6 | 以 PIT tick（10ms）为单位等待；期间 `sti; hlt` 让 PIT 继续推进 |
 | `getpid` | 39 | ✅ v0.6 | 返回当前用户程序 PID（串口打印 `user: getpid -> N`） |
 | `exit` | 60 | ✅ v0.6 | 记录退出码并结束用户态执行（不返回） |
-| `mmap` | 9 | ✅ v0.9 第一步 | 匿名映射：只收 `MAP_PRIVATE\|MAP_ANONYMOUS`、`fd` 必须 -1、**只传 5 个参数（无 offset）**；first-fit 落在 256 KiB 的 mmap 窗口；新页**保证全零**；`PROT_WRITE\|PROT_EXEC` 拒绝（W^X）；`PROT_NONE` 自 v1.0 起合法（映射存在、帧已分配，但 ring3 不可访问，可由 `mprotect` 启用，见 3.10） |
+| `mmap` | 9 | ✅ v0.9 第一步 / v1.0 第二·三步 | **匿名**：`MAP_PRIVATE\|MAP_ANONYMOUS`、`fd = -1`、`offset = 0`；**文件**（v1.0 第三步）：`fd ≥ 3` 可读、`MAP_PRIVATE`、只读（拒绝 `PROT_WRITE`/`PROT_EXEC`）、`offset` 页对齐，把 `[offset, offset+len)` 拷进新映射；first-fit 落在 256 KiB 的 mmap 窗口；新页**保证全零**；W^X 生效；`PROT_NONE` 合法（见 3.10） |
 | `munmap` | 11 | ✅ v0.9 第一步 | 整段归还：页对齐 + 全段已映射，否则 `-EINVAL`；执行时清页表项 **并 `invlpg`**（否则 TLB 会留下幽灵映射） |
 | `brk` | 12 | ✅ v0.9 第一步 | 增长/收缩堆顶（窗口 256 KiB）；`addr = 0` 只查询；**Linux 语义：不返回错误**，失败返回原值（`ret < addr` 即失败）；增长全成或全不成 |
-| `fork` / `execve` / `wait4` | 57 / 59 / 61 | ✅ v0.9 第三步 | `fork` 复制地址空间与当前用户帧（子进程 `rax=0`、父进程得 PID）；`execve(path, argv)` 换映像并重建 argv 用户栈（**成功不返回**）；`wait4(pid)` 运行并回收直接子进程、返回退出码（非子进程 `-ECHILD`）；详见 3.7 |
+| `fork` / `execve` / `wait4` | 57 / 59 / 61 | ✅ v0.9 第三步 / v1.0 第二步 | `fork` 复制地址空间与当前用户帧（子进程 `rax=0`、父进程得 PID）；`execve(path, argv, envp)` 换映像并重建 argv/envp 用户栈（**成功不返回**；`envp` = `args[4]`/`args[5]`，见 3.4）；`wait4(pid)` 运行并回收直接子进程、返回退出码（非子进程 `-ECHILD`）；详见 3.7 |
 | `mprotect` | 10 | ✅ v1.0 第一步 | 改写**已映射**页的保护属性（页对齐、`len > 0`、范围不跨窗口、每页已映射，缺一即 `-EINVAL`）；`PROT_WRITE\|PROT_EXEC` 仍拒绝（W^X）；`PROT_NONE` 清 `USER` 位而保留 `PRESENT`（帧与内容都在，可改回来）；用户栈固定 `RW`+`NX`，不在支持范围 —— 详见 3.10 |
+| `socket` | 41 | ✅ v1.0 第四步 | `socket(AF_INET, SOCK_DGRAM, 0/IPPROTO_UDP)` 建一个 UDP 套接字，返回 fd（与文件共用编号空间）；别的族/类型 `-EAFNOSUPPORT`/`-EPROTONOSUPPORT`（见 3.14） |
+| `sendto` | 44 | ✅ v1.0 第四步 | `sendto(fd, buf, len, flags, addr, addr_len)`：向 16 字节 `sockaddr_in` 发一个 UDP 数据报，返回**载荷字节数**；`flags != 0` → `-EOPNOTSUPP`、超 1472 → `-EMSGSIZE`、无网卡/未 DHCP → `-ENETDOWN` |
+| `recvfrom` | 45 | ✅ v1.0 第四步 | `recvfrom(fd, buf, len, flags, addr, addr_len_ptr)`：内核同步轮询网卡收一个数据报并回填发送方地址；未 `bind` → `-EINVAL`、2 秒超时 → `-EAGAIN` |
+| `bind` | 49 | ✅ v1.0 第四步 | `bind(fd, addr, addr_len)`：绑本地端口（`port = 0` 分配临时端口）；端口被占 `-EADDRINUSE`、非本机地址 `-EADDRNOTAVAIL` |
 
-分发表按 `SYS_MAX`(=267) 排满：未实现的号落在公共 ENOSYS 桩，
+分发表按 `SYS_MAX`(=268) 排满：未实现的号落在公共 ENOSYS 桩，
 「号合法但未实现」与「号越界」是两种可区分的失败路径。
 号段划分：`0..=255` 沿用 Linux 语义，`>= 256` 是 Cerlesse 扩展 —— `256` = `getprocs`、
 `257..=260` 由 CKM 提案预留、`261..=266` 由 CSS 使用（已实现 **261 `storage_volumes`**、
 **262 `storage_mount`**、**263 `storage_unmount`**、**264 `storage_assign_letter`**、**265 `storage_rescan`**；
-只有 **266 `storage_format`** 仍落 ENOSYS 桩 —— 它要 CSS-4 才定义，见 3.11/3.12）。
+只有 **266 `storage_format`** 仍落 ENOSYS 桩 —— 它要 CSS-4 才定义，见 3.11/3.12），
+`267` = **`net_config`**（v1.0 第四步：导出 DHCP 协商到的本机地址/网关/MAC，见 3.14）。
 
 文件 syscall 的两条硬规则（v0.7 新增）：
 
@@ -369,12 +379,15 @@ user/hello (Rust + libc)
 ### 3.4 仍未做（v0.9 起逐步补齐）
 
 - ~~用户堆~~ → **已做**（3.5：`brk`/`mmap`/`munmap` + libc 全局分配器）；
-  ~~`mprotect`（`PROT_NONE`、W^X 转换）~~ → **已做**（3.10）；仍缺**文件映射**（`mmap` 加 offset）；
+  ~~`mprotect`（`PROT_NONE`、W^X 转换）~~ → **已做**（3.10）；
+  ~~`mmap` 的 `offset` 槽位~~ → **已做**（v1.0 第二步：ABI 扩到 `r9`，匿名映射要求 `offset=0`）；
+  ~~文件映射~~ → **已做**（v1.0 第三步：只读私有映射，见 3.13）；**可写**文件映射（`MAP_SHARED`）仍缺；
 - ~~`stdin`~~ → **已做**（3.6：键盘行缓冲 → `read(0)` 整行交付）；
 - ~~**`fork`/`execve`/`wait4` 与进程对象**~~ → **已做**（3.7）：每进程地址空间 +
   每进程内核栈 + 停在 syscall 里的完整用户帧，Shell 的外部程序（`/bin/hello`）已能跑；
 - ~~`argc/argv`~~ → **已做**（3.7：参数经入口寄存器 `rdi`/`rsi` 传递，`libc::args` 读出）；
-  环境变量（`envp`）仍未做；
+  ~~环境变量（`envp`）~~ → **已做**（v1.0 第二步：`envc`/`envp` 经 `rdx`/`r10` 传递，`libc::env` 读出，
+  `execve` 默认继承、Shell 有 `env` 内建）；
 - ~~基础用户程序与目录/进程枚举~~ → **已做**（3.8：`getdents` + `getprocs`，`/bin/{ls,cat,echo,ps}`）；
   其余程序（`cp`/`mv`/`rm`/`mkdir`/`kill`）与 Shell 增强（`cd`、管道、重定向）仍未做；
 - `stac`/`clac` 精细控制（内核目前直接读写用户页）、内核高半区迁移；
@@ -409,10 +422,10 @@ v0.9 的运行时前置条件按依赖顺序补：**先有可分配的用户内�
    `user: frames free before=119159 after=119159` → `user: heap frame reclamation PASS`
    （内核在 selftest 里直接对比帧分配器的 `free_frames`，不靠日志措辞）。
 
-负例也逐条具体（不是「都失败就行」）：文件映射 / `MAP_SHARED` / `PROT_WRITE|PROT_EXEC` /
+负例也逐条具体（不是「都失败就行」）：无有效 fd（文件映射）/ `MAP_SHARED` / `PROT_WRITE|PROT_EXEC` /
 未对齐的 `munmap` / 重复 `munmap` → `-EINVAL`(-22)；超过 256 KiB 窗口 → `-ENOMEM`(-12)。
 
-**仍然没有的**（写下来避免误读）：文件映射（`mmap` 无 offset 参数、`fd` 必须 -1）、
+**仍然没有的**（写下来避免误读）：**可写**文件映射（只读私有映射已由 v1.0 第三步补上，见 3.13）、
 回收式分配器（`dealloc` 是空操作：一次运行结束由内核整棵释放；长驻程序的内存占用会单调上升）。
 （`mprotect` 已由 v1.0 第一步补上，见 3.10。）
 
@@ -712,6 +725,111 @@ CSS-3（见 [storage.md](./storage.md) 第 4/9 节）把 262/263/264 从 ENOSYS 
   - [x] 权限：`/bin/hello`（uid 2000）三次存储受控动作均 `-1` + `ckm: policy op=storage_mount … need=0x10`
         （判定点 8 的拒绝三件套）。
 
+### 3.13 第 6 个参数（`r9`）与环境变量 `envp`（v1.0 第二步，2026-10-12 落地）
+
+内存管理一节的两个缺口在这版一起补齐：**`mmap` 的 `offset`** 与 **`execve` 的环境变量**。
+两者都需要 syscall ABI 的**第 6 个参数**，所以先扩 ABI，再分别落到两个调用上。
+
+**ABI 扩展**（`kernel/src/syscall/{mod,syscall_table,trampoline}.rs`）：
+
+- 入口汇编本来就把 15 个通用寄存器全部压栈（`fork` 需要完整帧），`r9` 早在
+  `UserFrame` 偏移 `+96` 处 —— 因此内核侧只是把分发参数从 `&[u64; 5]` 换成
+  `&[u64; 6]`（`rdi, rsi, rdx, r10, r8, r9`），所有 handler 签名同步；
+- `libc` 侧新增 `raw6`（`in("r9")`），`raw` 保留为 5 参数便捷形式（第 6 参数传 0）；
+  多数调用点因此无需改动。
+
+**环境变量 `envp`**：
+
+| 项 | 位置 | 说明 |
+| ---- | ---- | ---- |
+| 内核读取/校验 | `syscall/process.rs::sys_exec` | `args[4]`/`args[5]` = `envp_ptr`/`envc`；与 `argv` 同一套「指针 + 长度」对数组，逐段经 `valid_user_range` 校验（`ENV_MAX`/`ENV_MAX_LEN`） |
+| 用户栈布局 | `syscall/process.rs::build_user_frame` | `argv` 块下方再放 `envp` 字符串 + 指针数组，两块各有独立栈预算（`ARG_MAX_BYTES` / `ENV_MAX_BYTES`） |
+| 入口寄存器 | `UserFrame::new_user` | `rdi=argc, rsi=argv, rdx=envc, r10=envp`；`libc` 的 `_start` 把 `r10` 搬到 `rcx` 后调 `cer_start`（`rcx` 在 `sysret` 里是返回 RIP，不能直接用） |
+| 顶层默认环境 | `syscall/user.rs::DEFAULT_ENV` | `PATH=/bin`、`HOME=/`、`TERM=cerlesse` —— 内核直接运行的程序没有父进程可继承 |
+| 用户态 API | `libc/src/env.rs` | `count`/`env`/`get`/`has` + 迭代器；`execve` 默认继承当前环境，`execve_env` 显式替换 |
+| Shell | `user/shell` | 新增 `env` 内建，打印本进程环境 |
+
+验收（断言串口事实，`make test-user` / `make test-proc`）：
+
+- `hello-bin: envc=3` / `hello-bin: env PATH=/bin` / `hello-bin: env HOME=/`：`/bin/hello`
+  由 Shell `fork` + `execve` 起来，这三行同时证明「`envp` 经入口寄存器送达」与
+  「`execve` 默认继承父环境」；
+- `sh: env PATH=/bin` / `sh: env count=3`：Shell 的 `env` 内建；
+- `user: mmap rejected (MAP_ANONYMOUS requires offset=0)` + `hello: mmap offset ret=-22`：
+  匿名映射的非 0 `offset` 被**明确拒绝**；
+- `hello: mmap zero-offset ret=...`：`offset=0` 的匿名映射照常成功。
+
+**文件映射（v1.0 第三步）**：`fd ≥ 3`、`flags = MAP_PRIVATE`、**只读**（拒绝
+`PROT_WRITE`/`PROT_EXEC`）、`offset` 页对齐 —— 把文件 `[offset, offset+len)` 的字节
+拷进新映射（文件尾之后补零）。`MAP_SHARED`（写回文件）仍未实现，明确拒绝。
+`mmap` 的 `fd` 不再是常量：`fd = -1` + `MAP_ANONYMOUS` 走匿名路径，`fd ≥ 3` 且无
+`MAP_ANONYMOUS` 走文件路径。
+
+验收（`make test-user`）：
+
+- `hello: filemmap wrote=5120` → `hello: filemmap contents=1` → `hello: filemmap munmap ret=0`：
+  `/init` 造一个 5120 字节模式文件，再 `mmap_file(fd, 4096, PROT_READ, MAP_PRIVATE, 4096)`，
+  逐字节校验 `[4096, 5120)` 的内容与 `offset` 真的生效；
+- `user: mmap rejected (file-backed mmap offset must be page-aligned)` /
+  `(file-backed mmap is read-only (no PROT_WRITE/PROT_EXEC))` /
+  `(file-backed mmap supports MAP_PRIVATE only (no MAP_SHARED))` + 对应 `-22`：三类拒绝各一条。
+
+### 3.14 UDP 套接字最小集（v1.0 第四步，2026-10-13 落地）
+
+分析文档「网络栈」一节点到「socket 层缺失」：v0.9 的网络只在内核内部验证（ARP/DHCP/ICMP），
+用户态拿不到 `socket()`/`bind()`/`sendto()`/`recvfrom()`。这版把 UDP 接到用户态，
+仍**不碰 TCP**（`SOCK_STREAM` 明确 `-EPROTONOSUPPORT`）。
+
+**ABI（`abi/src/socket.rs`）**：`AF_INET=2`、`SOCK_DGRAM=2`、`IPPROTO_UDP=17`，
+16 字节 `sockaddr_in`（`family` 主机序、`port`/`addr` 网络字节序），以及 16 字节
+`net_config` 记录（本机 IP / 网关 / MAC）。调用号沿用 Linux：`socket=41`、`sendto=44`、
+`recvfrom=45`、`bind=49`；`net_config=267` 是新的 Cerlesse 扩展号（`SYS_MAX` 267 → **268**，
+`NAMED` 26 → 31，`errno` 增加 socket 类取值）。地址族/类型的可用范围写死在常量里 ——
+「哪个调用存在」从定义就能读出。
+
+**内核**：
+
+| 位置 | 内容 |
+| ---- | ---- |
+| `fs/file.rs` | fd 槽位由 `FileHandle` 泛化为 `Slot::{File, Socket(id)}`：**套接字与文件共用一个 fd 编号空间**（Linux 语义）；`close` 返回 `ClosedFd`，`read`/`write` 一个 UDP 套接字返回 `-ENOTCONN`（没有 `connect`） |
+| `network/socket.rs` | 固定容量套接字表（8 个槽位），只存本地端口；`create`/`bind`/`release`/`port_of`/`reset`。临时端口从 49152 起分配，`bind` 一个被占端口 → `-EADDRINUSE` |
+| `network/mod.rs` | 新增 `NetConfig`（DHCP 成功后在 `selftest` 里 `set_config`）、`udp_send`（源地址取配置、目的 MAC 按广播/网关/ARP 选择）与 `udp_recv_poll`（非阻塞轮询一次网卡，返回源地址/源端口/目的端口） |
+| `syscall/socket.rs` | 四个处理器 + `sys_net_config`；用户缓冲沿用「按页校验」（发出去可读、收进来可写），参数一律显式校验不静默忽略 |
+| `syscall/{mod,syscall_table,user,process}.rs` | 注册 5 个新号；`fs::file::reset()` 处同步 `network::socket::reset()`（换程序/`execve` 时套接字不泄漏） |
+
+**等待模型与边界**：`recvfrom` 在内核里**同步轮询**（与 v0.9 网络自测同一手法）：
+收到**目的端口等于本套接字端口**的数据报就交付，目的端口不匹配的直接丢弃；等待期间
+`sti; hlt` 让 PIT 推进，超过 200 tick（2 秒）返回 `-EAGAIN`。**没有等待队列** ——
+收不快的数据报会被丢弃，这是「非阻塞轮询、无中断」的既有取舍（见 `network/socket.rs` 头注）。
+
+**libc**：新增 `socket` 模块（`SockAddrIn`/`NetConfig` 的构造与读取）与
+`socket`/`bind`/`sendto`/`recvfrom`/`net_config` 五个包装；`lib.rs` 一并 re-export 相关常量。
+
+**验收（`make test-network`，断言串口事实）**：`/init` 用 socket API 走一次**真实的、
+自包含的**网络往返 —— 向 QEMU slirp 的内置 DHCP 服务器发 DISCOVER、收 OFFER 并核对：
+
+- `user: net_config ip=10.0.2.15 gateway=10.0.2.2 mac=…`（`hello: net_config ret=16`）；
+- `user: socket domain=AF_INET type=SOCK_DGRAM fd=3 id=0` + `hello: bind ret=0`；
+- `user: sendto fd=3 sport=68 dst=255.255.255.255:67 len=300 frame=342` + `hello: sendto ret=300`
+  （返回值是**载荷**字节数，整帧 342 = 14+20+8+300）；
+- `user: recvfrom fd=3 src=10.0.2.2:67 len=…` + `hello: socket dhcp op=2 cookie=1 yiaddr=10.0.2.15`
+  （收到的是真 reply、magic cookie 对、`yiaddr` 非 0）；
+- `hello: socket close ret=0` + `hello: socket PASS=1`。
+
+**负例**（`make test-network` 与 `make test-user` 都断言，无需网卡的那几条后者也跑）：
+`hello: socket bad-family ret=-97`（`AF_UNSPEC` → `-EAFNOSUPPORT`）、
+`hello: socket stream ret=-93`（`SOCK_STREAM` → `-EPROTONOSUPPORT`）、
+`hello: bind on file fd ret=-88`（文件 fd 传给 `bind` → `-ENOTSOCK`）、
+`hello: recvfrom unbound ret=-22`（未 `bind` → `-EINVAL`）、
+`hello: bind in-use ret=-98`（同端口二次绑定 → `-EADDRINUSE`）。
+
+**没有网卡时**：`net_config` 返回 `-ENODEV`，`/init` 打印
+`hello: socket skip network (no network device)` 并以 `socket PASS=1` 结束 ——
+同一个 `/init` 在带网卡与不带网卡的测试里都能跑（不把「没有网卡」当失败）。
+
+**仍未做**：TCP（三次握手/可靠传输）、`connect`/`listen`/`accept`、`MSG_*` 标志、
+等待队列与超时重传、`SO_*` 选项 —— 都在后续项里，这里明确拒绝而不是静默忽略。
+
 ## 4. 调用链示例
 
 实际调用链（v0.7 + v0.9 用户堆 / 动态链接 + v1.0 `mprotect`）：
@@ -754,6 +872,7 @@ fd ≥ 3 一律经 VFS 抽象路由，syscall 层不认识具体后端。
 
 | 日期 | 变更 |
 | ---- | ---- |
+| 2026-10-13 | **v1.0 第四步：UDP 套接字最小集（`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）** —— 新增 3.14；`abi` 新增 `socket.rs`（地址族/类型/协议、`sockaddr_in` 与 `net_config` 布局）、扩 `SYS_MAX` 267 → **268** 与 `NAMED` 26 → 31、`errno` 增加 socket 类取值；`fs/file.rs` 把 fd 槽位泛化为 `Slot::{File,Socket}`（共用一个编号空间，`close` 返回 `ClosedFd`）；新增 `network/socket.rs`（8 槽套接字表 + 端口分配）与 `network/mod.rs` 的 `NetConfig`/`udp_send`/`udp_recv_poll`；新增 `syscall/socket.rs`（四个处理器 + `net_config`，按页校验用户缓冲）；`libc` 新增 `socket` 模块与五个包装；`user/hello` 新增 `socket_selftest`（DHCP DISCOVER→OFFER 真往返 + 5 个负例）；`make test-network` 期望 15 → **30 项**、`make test-user` 111 → **116 项**（`orchestrate.json` 的 `network` 场景同步）；2.7 表、SYS_MAX/号段说明同步 |
 | 2026-10-06 | 第一阶段创建占位 |
 | 2026-10-07 | 补记路线细化：明确 v0.6/v0.7 的分工、syscall 列表拆分、libc 封装位置与验收占位 |
 | 2026-10-08 | 本次 docs 迭代统一文档顶部元信息与修订记录 |
@@ -769,3 +888,5 @@ fd ≥ 3 一律经 VFS 抽象路由，syscall 层不认识具体后端。
 | 2026-10-11 | **CSS-1：存储枚举（261 `storage_volumes` / 265 `storage_rescan`）** —— 新增 3.11；`syscall/storage.rs` 实现两个号（定长 64 字节卷记录、确定性枚举、`storage_volumes` 无需能力位、`rescan` 设备不存在 `-ENODEV`）；`syscall_table.rs` 的 `SYS_MAX` 257 → **267**，并在 CKM 预留的 257–260 之后开出 CSS 号段 261–266（261/265 已实现，262/263/264/266 落 `UNIMPLEMENTED` 桩，串口可区分「未实现」与「号越界」）；`libc` 新增 `storage_volumes`/`storage_rescan` + `volume_*` 解析器，新增用户程序 `user/volumes` → `/bin/volumes`；头部号段表、1 节分发表说明、3.4 与 3.10 的「空表」表述同步 |
 | 2026-10-12 | **阶段三：系统调用 ABI 的单一事实源（`abi/` crate）** —— 新增 `abi/`（`no_std`、零依赖、`forbid(unsafe_code)`）：`syscall.rs`（号 + `SYS_MAX` + 号段规则 + `NAMED`/`UNIMPLEMENTED`）、`errno.rs`、`flags.rs`（`O_*`/`PROT_*`/`MAP_*`/fd 编号）、`limits.rs`（`PATH_MAX`/`IO_MAX`/`ARG_*`）、`dirent.rs`/`procinfo.rs`/`volume.rs`/`ckm.rs`（记录布局、能力位、op 编号、受保护前缀）与 `record.rs`（编译期断言）；内核 18 个文件（`syscall/*` 9 + `fs/file.rs` + `security/capability.rs` + `ckm/{mod,audit,state,policy}.rs` + `storage/volume.rs` 等）与 `libc/src/syscall.rs` 的 45 个常量改为引用它（**对外名字与类型不变**，行为零变化）；新增 `make abi-check` 并入 `make check`。相关段落（3.8 的解析偏移、3.11 的记录布局）已改为指向 `abi` |
 | 2026-10-12 | **CSS-3：卷管理（262 `storage_mount` / 263 `storage_unmount` / 264 `storage_assign_letter`）** —— 新增 3.12；`syscall/storage.rs` 实现三个号（参数校验先于能力判定；对应 `fs::mount_volume_by_id`/`fs::unmount_point` 与 `storage::registry::assign_letter`）；`libc` 新增三个包装与 `path` 模块（`C:\x` → POSIX）、`/bin/volumes` 扩为 `list`/`mount`/`unmount`/`letter`/`demo`；头部号段表改为「只余 266 `storage_format` 落 ENOSYS 桩」，3.10 的桩表描述同步；验收在 `make test-storage`（盘符断言）/`test-programs`（`volumes demo` 双入口）/`test-ckm`（零能力拒绝） |
+| 2026-10-12 | **v1.0 第二步：syscall ABI 第 6 参数 `r9` + 环境变量 `envp` + `mmap` 的 `offset`** —— 新增 3.13；syscall 分发参数由 `&[u64; 5]` 扩为 `&[u64; 6]`（入口本就把 `r9` 压进 `UserFrame`），全部 handler 与 `SyscallHandler` 同步；`execve(path, argv, envp)` 读取 `args[4]`/`args[5]`，`build_user_frame` 在 `argv` 块下方再放 `envp`（`ENV_MAX`/`ENV_MAX_LEN`/`ENV_MAX_BYTES` 入 `abi::limits`），`UserFrame::new_user` 用 `rdx`/`r10` 传 `envc`/`envp`，顶层程序注入 `DEFAULT_ENV`；`mmap` 新增 `args[5]` `offset`，匿名映射非 0 明确 `EINVAL`；`libc` 新增 `raw6`/`env` 模块/`execve_env`/`mmap_with_offset`，`_start` 把 `r10` 搬进 `rcx`；`user/shell` 新增 `env` 内建、`user/hello-bin` 打印 `envc`/`env`、`user/hello` 增加 `offset` 正负例；`make test-user` 91 → **99 项**、`make test-proc` 26 项 + 4 正则（`orchestrate.json` 的 `user`/`proc` 场景同步）；本次 ABI 变更后 `test-{user,proc,shell,programs,dyn,fs,ckm,storage,network,driver}` 与 `test-kernel-only` 全量回归 PASS（`make go-test` 因环境缺 Go 未运行） |
+| 2026-10-12 | **v1.0 第三步：文件映射（`mmap` 的 `offset` 真正生效）** —— `syscall/memory.rs::sys_mmap` 按 `flags & MAP_ANONYMOUS` 分流：匿名要求 `offset=0`，文件映射要求 `fd ≥ 3` 可读、`flags = MAP_PRIVATE`、只读（拒绝 `PROT_WRITE`/`PROT_EXEC`）、`offset` 页对齐，把 `[offset, offset+len)` 拷进新映射（文件尾补零）；新增 `address_space::mmap_write`（按页帧物理地址写入，与 `stack_write` 同法）与 `fs::file::is_readable`；`libc` 新增 `mmap_file`；`user/hello` 新增 `file_mmap_selftest`（5120 字节模式文件 → `mmap_file(fd,4096,PROT_READ,MAP_PRIVATE,4096)` → 逐字节校验 + 三类拒绝）；`make test-user` 99 → **111 项**（`orchestrate.json` 的 `user` 场景同步）；3.13、2.7 表、3.4/3.5 的「文件映射仍未实现」全部同步为「只读私有已落地、可写 `MAP_SHARED` 仍缺」 |

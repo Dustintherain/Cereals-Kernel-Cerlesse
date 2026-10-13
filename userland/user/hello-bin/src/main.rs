@@ -10,6 +10,7 @@
 //! | `hello-bin: pid=N` | 新进程有**自己的** PID（不是 Shell 的） |
 //! | `hello-bin: argc=N` | `argc` 由内核经入口寄存器送达 `_start`（见 `libc::args`） |
 //! | `hello-bin: argv[i]=...` | `argv` 字符串真的写进了这个进程的用户栈 |
+//! | `hello-bin: envc=N` / `env PATH=/bin` | `envp` 同样经入口寄存器送达，且 `execve` 默认继承父环境 |
 //! | 返回值 0 / 非 0 | 退出码由 `wait4` 交给父进程（Shell 打印 `exit code=`） |
 //!
 //! 与 `user/hello`（`/init`）的差异：不用堆、不碰文件系统 —— 外部程序应当尽量薄，
@@ -64,12 +65,28 @@ pub extern "C" fn main() -> i32 {
             None => println!("hello-bin: argv[{}]=<missing>", i),
         }
     }
+    env_report();
     ckm_denials();
 
     println!("hello-bin: done, exiting with {}", (n - 1) as i32);
 
     // 退出码 = 参数个数 - 1（`hello` → 0，`hello a b` → 2）
     (n - 1) as i32
+}
+
+/// v1.0：环境变量真的被 `execve` 搬进了这个新映像（`docs/syscall.md`）。
+///
+/// 顶层 Shell 的环境来自内核默认集合（`PATH=/bin`、`HOME=/`、`TERM=cerlesse`），
+/// `/bin/hello` 又是被 Shell `fork` + `execve` 起来的 —— 因此这三行同时证明了
+/// 「内核把 envp 送进了 `_start`」与「`execve` 默认让子进程继承环境」两件事。
+fn env_report() {
+    println!("hello-bin: envc={}", libc::env_count());
+    for name in ["PATH", "HOME"] {
+        match libc::getenv(name) {
+            Some(value) => println!("hello-bin: env {}={}", name, value),
+            None => println!("hello-bin: env {}=<unset>", name),
+        }
+    }
 }
 
 /// CKM-1：`uid 2000` 的**默认拒绘**在 ring3 上的证据（`docs/ckm.md` 3.4 判定点 1/5）。

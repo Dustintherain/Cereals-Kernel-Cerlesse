@@ -13,3 +13,10 @@ pub const ARG_MAX: u64 = 8;
 pub const ARG_MAX_LEN: u64 = 256;
 /// `argv` 字符串 + 指针数组占用的用户栈上限（用户栈 16 KiB，这里只占一小块）。
 pub const ARG_MAX_BYTES: u64 = 1024;
+/// `execve` 的 `envp` 项数上限（与 `ARG_MAX` 同量级：环境变量比参数少）。
+pub const ENV_MAX: u64 = 8;
+/// 单个环境变量（`NAME=VALUE`）的长度上限。
+pub const ENV_MAX_LEN: u64 = 256;
+/// `envp` 字符串 + 指针数组占用的用户栈上限（与 [`ARG_MAX_BYTES`] 各自独立，
+/// 因此 `argv` + `envp` 合起来最多占用户栈 2 KiB，用户栈 16 KiB 绰绰有余）。
+pub const ENV_MAX_BYTES: u64 = 1024;

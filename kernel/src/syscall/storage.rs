@@ -42,7 +42,7 @@ use abi::errno::{EINVAL, EIO};
 /// 一个 LE `u64`（便于调用方先问大小、再决定缓冲）。
 ///
 /// 返回负数 = `-errno`；`buf_len < 64` 返回 `-EINVAL`（至少要装下一条记录）。
-pub unsafe fn sys_storage_volumes(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_storage_volumes(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (buf_ptr, buf_len, count_ptr) = (args[0], args[1], args[2]);
 
     if (buf_len as usize) < VOLUME_RECORD_SIZE {
@@ -92,7 +92,7 @@ pub unsafe fn sys_storage_volumes(args: &[u64; 5], space: *const UserSpace) -> i
 /// `disk_index == u32::MAX`（`0xFFFF_FFFF`）表示重扫全部设备；否则是块设备注册表
 /// 序号。重扫只做**只读扫描**：先摘掉该磁盘的旧卷记录，再按当前内容重建并打印
 /// 证据行。返回重扫后的卷数；设备不存在返回 `-ENODEV`。
-pub unsafe fn sys_storage_rescan(args: &[u64; 5], _space: *const UserSpace) -> i64 {
+pub unsafe fn sys_storage_rescan(args: &[u64; 6], _space: *const UserSpace) -> i64 {
     let index = args[0];
     if index > u32::MAX as u64 {
         return EINVAL;
@@ -171,7 +171,7 @@ unsafe fn user_str(
 /// 其余位一律 `EINVAL`（未知标志不静默忽略：那是「明明要只读却写了」的来源）。
 /// 已挂载的卷再加挂载点只加**别名**（同一份数据，CSS-2 的 `alias_volume`），
 /// 因此「两个入口不是两份数据」在这条路径上也成立。
-pub unsafe fn sys_storage_mount(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_storage_mount(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (vol_ptr, vol_len, point_ptr, point_len, flags) =
         (args[0], args[1], args[2], args[3], args[4]);
     if flags & !1 != 0 {
@@ -229,7 +229,7 @@ pub unsafe fn sys_storage_mount(args: &[u64; 5], space: *const UserSpace) -> i64
 ///
 /// 卸载的是**别名**：卷仍在卷表里（`mount_count` 减一），再次挂载不需要重新探测
 /// 设备。卸下加载点 `/` 返回 `EINVAL`（那是系统唯一的根文件系统）。
-pub unsafe fn sys_storage_unmount(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_storage_unmount(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (point_ptr, point_len, a, b, c) = (args[0], args[1], args[2], args[3], args[4]);
     if a != 0 || b != 0 || c != 0 {
         return EINVAL;
@@ -271,7 +271,7 @@ pub unsafe fn sys_storage_unmount(args: &[u64; 5], space: *const UserSpace) -> i
 /// `letter` 是 ASCII（`'A'..='Z'`）；`0` 表示**取消自定义映射、回到缺省规则**
 /// （不是「没有盘符」—— 缺省规则会立刻补一个）。字母被别的卷占着 -> `EEXIST`。
 /// 映射写进 CKM 状态区（`storage/letters`），因此重启后字母不变。
-pub unsafe fn sys_storage_assign_letter(args: &[u64; 5], space: *const UserSpace) -> i64 {
+pub unsafe fn sys_storage_assign_letter(args: &[u64; 6], space: *const UserSpace) -> i64 {
     let (vol_ptr, vol_len, letter, a, b) = (args[0], args[1], args[2], args[3], args[4]);
     if a != 0 || b != 0 || letter > u8::MAX as u64 {
         return EINVAL;

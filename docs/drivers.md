@@ -2,7 +2,7 @@
 
 - 阶段：第八阶段（v0.8 驱动框架 / PCI / 块设备；v0.9 网络栈；v0.4 中断控制时钟键盘已完成）
 - 最后更新：2026-10-11
-- 状态：✅ v0.8 已完成（**驱动注册框架 + PCI 枚举 + 块设备抽象 + virtio-blk（legacy）**，`make test-driver` 22 项 PASS；**磁盘文件系统 FAT12/16/32 已挂到 VFS**，`make test-fat` 21 项 PASS）；**v0.9 简化网络栈已落地**（**virtio-net（legacy）+ Ethernet → ARP → IPv4 → UDP**，`make test-network` 13 项 PASS；TCP / socket 仍为占位，见 1.8）；v0.4（中断控制器 + PIT + PS/2 键盘 + 上下文切换原语 + H-04/H-05 Go 工具）已完成
+- 状态：✅ v0.8 已完成（**驱动注册框架 + PCI 枚举 + 块设备抽象 + virtio-blk（legacy）**，`make test-driver` 22 项 PASS；**磁盘文件系统 FAT12/16/32 已挂到 VFS**，`make test-fat` 21 项 PASS）；**v0.9 简化网络栈已落地**（**virtio-net（legacy）+ Ethernet → ARP → IPv4 → UDP**，`make test-network` 13 项 PASS）；**ICMP Echo（ping）已落地**；**v1.0 第四步：UDP 套接字最小集已落地**（`socket`/`bind`/`sendto`/`recvfrom` + `net_config`，`make test-network` 增至 30 项；**TCP 仍为占位**，见 1.8/1.9）；v0.4（中断控制器 + PIT + PS/2 键盘 + 上下文切换原语 + H-04/H-05 Go 工具）已完成
 - 依赖：interrupt（IRQ 分发）、memory（连续物理帧 → DMA / virtqueue）、arch::port（端口 I/O）
 
 > 本文档顶部保留阶段/最后更新/状态字段，与项目文档维护约定对齐。
@@ -184,7 +184,9 @@ IMAGE UNCHANGED (write test restored the scratch sector)
 | `kernel/src/network/ipv4.rs` | IPv4 地址、头组帧 / 解析、互联网校验和（`sum16` / `finish`） |
 | `kernel/src/network/udp.rs` | UDP 组帧 / 解析（发送算 IPv4 伪头校验和；接收校验非零校验和） |
 | `kernel/src/network/dhcp.rs` | DHCP DISCOVER 组包 + OFFER 解析（UDP 往返的验收载体） |
-| `kernel/src/network/mod.rs` | `Stack`（设备 + 地址 + ARP 缓存）+ `selftest` 验收编排 |
+| `kernel/src/network/mod.rs` | `Stack`（设备 + 地址 + ARP 缓存）+ `NetConfig`/`udp_send`/`udp_recv_poll` + `selftest` 验收编排 |
+| `kernel/src/network/socket.rs` | 面向用户态的 UDP 套接字表（v1.0 第四步：本地端口 + 临时端口分配） |
+| `kernel/src/syscall/socket.rs` | `socket`/`bind`/`sendto`/`recvfrom` + `net_config` 处理器（见 `docs/syscall.md` 3.14） |
 
 启动顺序（挂载磁盘文件系统之后、调度器/用户态之前）：
 
@@ -203,11 +205,43 @@ network::selftest(dev)    → ARP 解析网关 + DHCP DISCOVER → OFFER
 - `net: arp 10.0.2.2 -> 52:55:0a:00:02:02 (reply)`：ARP 广播请求 → 单播应答，MAC 正是 slirp 网关；
 - `net: dhcp offer yiaddr=10.0.2.15 server=10.0.2.2 mask=255.255.255.0 router=10.0.2.2`：
   UDP 68→67 的 DISCOVER → OFFER 往返，报文里的地址 / 掩码 / 网关都被解析出来
-  —— 这是 Ethernet → IPv4 → UDP 收发两条路径都通了的证据。
+  —— 这是 Ethernet → IPv4 → UDP 收发两条路径都通了的证据；
+- `net: icmp echo id=0x4242 seq=7 payload=13 reply from 10.0.2.2` + `net: icmp PASS`：
+  ICMP Echo 请求（IPv4 `proto=1`）→ 回显**逐字节相同**载荷的应答 —— ICMP 路径也通了。
 
-**边界（与 `docs/architecture.md` 第 5 节一致，别读成已完成）**：不做 TCP（`network/tcp.rs` 仍是占位）、
-不做重传 / 窗口；不做 IP 分片重组（收到 `MF` 置位或 offset ≠ 0 的 IPv4 报文直接丢弃）；
-`network/socket.rs`（面向用户态的 socket）仍为占位。中断仍不配置 —— 与块设备一样走同步轮询。
+**边界（与 `docs/architecture.md` 第 5 节一致，别读成已完成）**：ICMP 只做 **Echo（ping）**，
+不做差错报文；不做 TCP（`network/tcp.rs` 仍是占位）、不做重传 / 窗口；不做 IP 分片重组（收到 `MF` 置位或 offset ≠ 0 的 IPv4 报文直接丢弃）；
+`network/socket.rs`（面向用户态的 UDP socket）**已在 v1.0 第四步落地**（见 1.9）；TCP 仍为占位。中断仍不配置 —— 与块设备一样走同步轮询。
+
+### 1.9 v1.0 第四步已落地：UDP 套接字最小集（`socket` / `bind` / `sendto` / `recvfrom`）
+
+把 1.8 的内核内部网络闭环接到用户态：`AF_INET` + `SOCK_DGRAM` 的 BSD 风格最小集，
+号沿用 Linux（`socket=41`、`sendto=44`、`recvfrom=45`、`bind=49`），另加 Cerlesse 扩展号
+`net_config=267` 导出 DHCP 协商到的本机地址/网关/MAC。
+
+| 文件 | 职责 |
+| ---- | ---- |
+| `kernel/src/fs/file.rs` | fd 槽位泛化为 `Slot::{File, Socket(id)}`：套接字与文件**共用一个 fd 编号空间**；`close` 返回 `ClosedFd` 以回收套接字 |
+| `kernel/src/network/socket.rs` | 套接字表（8 槽）+ 临时端口分配（49152 起）+ `bind` 冲突检测 |
+| `kernel/src/network/mod.rs` | `NetConfig`（DHCP 成功后 `set_config`）、`udp_send`（目的 MAC 按广播/网关/ARP 选择）、`udp_recv_poll`（非阻塞轮询一次） |
+| `kernel/src/syscall/socket.rs` | 四个处理器 + `sys_net_config`，按页校验用户缓冲 |
+| `userland/libc/src/socket.rs` | `SockAddrIn` / `NetConfig` 的用户态形状（端口/地址网络字节序） |
+
+**验收（`make test-network`，30 项）**：`/init` 用 socket API 向 slirp 的内置 DHCP 服务器
+发 DISCOVER、收 OFFER 并核对 —— 一次**真实的、自包含的** UDP 往返：
+
+- `user: socket domain=AF_INET type=SOCK_DGRAM fd=3 id=0` / `hello: bind ret=0`；
+- `user: sendto fd=3 sport=68 dst=255.255.255.255:67 len=300 frame=342`；
+- `user: recvfrom fd=3 src=10.0.2.2:67` + `hello: socket dhcp op=2 cookie=1 yiaddr=10.0.2.15`；
+- `hello: socket close ret=0` / `hello: socket PASS=1`。
+
+负例：`hello: socket bad-family ret=-97` / `socket stream ret=-93` /
+`bind on file fd ret=-88` / `recvfrom unbound ret=-22` / `bind in-use ret=-98`。
+没有网卡时 `net_config` 返回 `-ENODEV`，`/init` 打印 `socket skip network (no network device)`
+并以 `socket PASS=1` 结束（`make test-user` 也照跑那几条不需要网卡的负例）。
+
+**边界**：TCP、`connect`/`listen`/`accept`、`MSG_*`、等待队列、`SO_*` 选项均未做，
+明确拒绝而不是静默忽略（详见 `docs/syscall.md` 3.14）。
 
 ## 2. 开发路线
 
@@ -230,13 +264,16 @@ network::selftest(dev)    → ARP 解析网关 + DHCP DISCOVER → OFFER
 
 1. [x] Network Driver：`virtio-net`（legacy，复用 v0.8 的 `Driver` 框架与 PCI 枚举）—— `driver/virtio_net.rs`
 2. [x] Ethernet → ARP → IPv4 → UDP（`network/{ethernet,arp,ipv4,udp,dhcp}.rs`，验收见 1.8）
-3. [ ] ICMP → TCP（尽力） → Socket API（仍为占位）
+3. [x] **ICMP（Echo/ping）**（`network/icmp.rs` + `Stack::icmp_ping`，验收见 1.8）
+4. [x] **Socket API（UDP 最小集）**：`socket`/`bind`/`sendto`/`recvfrom` + `net_config`（v1.0 第四步，见 1.9）
+5. [ ] TCP（尽力） → 面向流的 Socket（仍为占位）
 
 验收（v0.9）：
 
 - [x] Shell 交互可用（`make test-shell`，v0.9 第二步）
 - [x] 网络最小闭环：ARP 解析网关 + DHCP 的 UDP 往返（`make test-network`）
-- [ ] ping/HTTP 简例（ICMP/TCP 落地后再做）
+- [x] **ping（ICMP Echo）**：对网关发 Echo 并校验回显载荷（`make test-network`，见 1.8）
+- [ ] HTTP 简例（TCP 落地后再做）
 
 ## 3. 驱动列表
 
@@ -275,4 +312,6 @@ network::selftest(dev)    → ARP 解析网关 + DHCP DISCOVER → OFFER
 | 2026-10-11 | **v0.9 输入侧**：键盘驱动加行缓冲（行编辑 + 整行交付 + `kbd: line ready len=N`），回显由 `KB <字符>` 改为终端式原样回显；1.6 补记、1.7 限制项由「无环形缓冲」改为「单行缓冲 + cooked 回显」；`make test-keyboard` 断言同步 |
 | 2026-10-11 | **v0.8 收官**：磁盘文件系统 FAT12/16/32（`fs/fat.rs`，只读）挂到 VFS，`fs::mount_disks` 接入启动链（`/disk` + `/mnt/fat`）；H-03 `tools/mkfs/mkfs.py` 落地（mtools 独立复核）；新增 `make test-fat`（21 项，双盘）与编排场景 `fat`（10 场景）；状态行改为「v0.8 已完成」，限制项从「FAT32 未做」改为「FAT 只读、无扇区缓存」 |
 | 2026-10-11 | **v0.8 前半落地**：新增 `driver/pci.rs`（机制 #1 + BAR 探测 + 窗口大小）、`driver/driver.rs`（注册框架 + `probe_all`）、`driver/block.rs`（按扇区读写 + 验收自测）、`driver/virtio_blk.rs`（legacy virtio 0.9.5，同步轮询 + bounce buffer）、`arch/x86_64/port.rs`（端口 I/O）、`frame::allocate_contiguous`；启动盘改为 virtio-blk（Makefile / `tests/test_boot.py` / `tests/test_keyboard.py`，`disable-modern=on`）；新增 `make test-driver`（22 项）与编排场景 `driver`（9 场景）；修 B-16（BAR 大小 32→64 位宽错误）、B-17（LBA 溢出未拦）；状态行由「v0.8 尚未编写」改为「v0.8 前半完成，FAT32 待做」 |
+| 2026-10-13 | **v1.0 第四步：UDP 套接字最小集** —— 新增 1.9；`fs/file.rs` 的 fd 槽位泛化为 `Slot::{File,Socket}`；新增 `network/socket.rs`（8 槽表 + 端口分配）与 `network/mod.rs` 的 `NetConfig`/`udp_send`/`udp_recv_poll`；新增 `syscall/socket.rs`（`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）；`libc` 新增 `socket` 模块与包装；`user/hello` 新增 `socket_selftest`（DHCP DISCOVER→OFFER + 5 负例）；`make test-network` 15 → **30 项**；TCP 仍为占位 |
 | 2026-10-11 | **v0.9 简化网络栈落地**：新增 `driver/net.rs`（`NetworkDevice` trait + 注册表）、`driver/virtio_net.rs`（legacy virtio-net 0.9.5：RX/TX 双队列、10 字节 virtio-net 头、MAC 读自设备配置空间、同步轮询）、`network/{ethernet,arp,ipv4,udp,dhcp}.rs` 与 `network/mod.rs`（`Stack` + `selftest`）；`network/{tcp,socket}.rs` 占位说明更新；`driver/driver.rs::register_builtin` 追加 virtio-net；`main.rs` 在磁盘验收后跑网络自测（无网卡时跳过）；新增 `make test-network`（13 项，QEMU 加 legacy virtio-net-pci + `-netdev user`）与编排场景 `network`（12 → **13 场景**）；`tests/test_boot.py` 增 `--nic`；新增 1.8 节与状态行、驱动列表更新 |
+| 2026-10-12 | **ICMP（Echo/ping）落地** —— 新增 `network/icmp.rs`（Echo 组帧/解析，校验和复用 `ipv4::checksum`）与 `ipv4::PROTO_ICMP`；`network/mod.rs::Stack::icmp_ping`（Echo 请求 → 校验 Ethernet/IPv4/源地址/类型/id/seq 与**回显载荷逐字节相同**）；`selftest` 在 DHCP 之后向网关发 ping（`make test-network` 13 → **15 项**，`orchestrate.json` 的 `network` 场景同步）；状态行 / 1.8 / 2.2 清单（ICMP 勾选）/ 边界同步 |

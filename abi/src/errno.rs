@@ -36,3 +36,28 @@ pub const EINVAL: i64 = -22;
 pub const ENOSPC: i64 = -28;
 /// `-ENOSYS`：号合法但内核未实现（或号越界时的兜底返回）。
 pub const ENOSYS: i64 = -38;
+
+// ---- Socket / 网络类（Linux 取值）----
+/// `-ENODEV`：系统里没有对应的设备（`net_config` 在**没有网卡**时返回它）。
+pub const ENODEV: i64 = -19;
+/// `-ENOTSOCK`：fd 有效但不是套接字（`bind`/`sendto`/`recvfrom` 传了文件 fd）。
+pub const ENOTSOCK: i64 = -88;
+/// `-EMSGSIZE`：报文太长（`sendto` 的载荷超过 [`crate::socket::UDP_PAYLOAD_MAX`]）。
+pub const EMSGSIZE: i64 = -90;
+/// `-EPROTONOSUPPORT`：协议不支持（例如 `socket(AF_INET, SOCK_STREAM, ..)`）。
+pub const EPROTONOSUPPORT: i64 = -93;
+/// `-EOPNOTSUPP`：操作不支持（例如 `sendto` 传了非 0 `flags`）。
+pub const EOPNOTSUPP: i64 = -95;
+/// `-EAFNOSUPPORT`：地址族不支持（本内核只认 `AF_INET`）。
+pub const EAFNOSUPPORT: i64 = -97;
+/// `-EADDRINUSE`：端口已被别的套接字占用（`bind`）。
+pub const EADDRINUSE: i64 = -98;
+/// `-EADDRNOTAVAIL`：`bind` 的地址不是本机地址（本内核只接受 `0.0.0.0` 或本机租约地址）。
+pub const EADDRNOTAVAIL: i64 = -99;
+/// `-ENETDOWN`：网络不可用（没有网卡，或 DHCP 尚未协商出地址）。
+pub const ENETDOWN: i64 = -100;
+/// `-ENOTCONN`：套接字未连接（`read`/`write` 一个 UDP 套接字时返回它；
+/// 本内核没有 `connect`，因此 UDP 一律走 `sendto`/`recvfrom`）。
+pub const ENOTCONN: i64 = -107;
+/// `-EHOSTUNREACH`：目的地址的 MAC 解析不到（ARP 超时且没有可用网关）。
+pub const EHOSTUNREACH: i64 = -113;

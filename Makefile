@@ -296,7 +296,7 @@ test-user: image
 		--expect "hello: heap pattern=1" \
 		--expect "user: brk rejected addr=0x8000120000" \
 		--expect "hello: brk over ret=0x8000022000 refused=1" \
-		--expect "user: mmap len=8192 prot=0x3 flags=0x22 -> 0x8000060000 pages=2" \
+		--expect "user: mmap len=8192 prot=0x3 flags=0x22 offset=0x0 -> 0x8000060000 pages=2" \
 		--expect "hello: mmap zeroed=1" \
 		--expect "hello: mmap pattern=1" \
 		--expect "user: write fd=1 len=26" \
@@ -304,9 +304,24 @@ test-user: image
 		--expect "hello: heap write ret=26" \
 		--expect "user: munmap addr=0x8000060000 len=8192" \
 		--expect "hello: munmap ret=0" \
-		--expect "user: mmap rejected (file-backed mmap is not supported" \
+		--expect "user: mmap rejected (file-backed mmap needs an open fd (>= 3))" \
 		--expect "hello: mmap file-backed ret=-22" \
 		--expect "hello: mmap shared ret=-22" \
+		--expect "user: mmap rejected (MAP_ANONYMOUS requires offset=0)" \
+		--expect "hello: mmap offset ret=-22" \
+		--expect "hello: mmap zero-offset ret=" \
+		--expect "hello: filemmap create /tmp/mmap.bin fd=" \
+		--expect "hello: filemmap wrote=5120" \
+		--expect "user: mmap len=4096 prot=0x1 flags=0x2 offset=0x1000 file=/tmp/mmap.bin -> " \
+		--expect "hello: filemmap contents=1" \
+		--expect "hello: filemmap munmap ret=0" \
+		--expect "user: mmap rejected (file-backed mmap offset must be page-aligned)" \
+		--expect "hello: filemmap misaligned ret=-22" \
+		--expect "user: mmap rejected (file-backed mmap is read-only (no PROT_WRITE/PROT_EXEC))" \
+		--expect "hello: filemmap write ret=-22" \
+		--expect "user: mmap rejected (file-backed mmap supports MAP_PRIVATE only (no MAP_SHARED))" \
+		--expect "hello: filemmap shared ret=-22" \
+		--expect "hello: filemmap PASS=1" \
 		--expect "user: mmap errno=12 len=266240" \
 		--expect "hello: mmap too big ret=-12" \
 		--expect "hello: mmap wx ret=-22" \
@@ -354,6 +369,11 @@ test-user: image
 		--expect "hello: ckm component_state -> 3 count=3" \
 		--expect "hello: ckm open /etc/init.flag fd=3" \
 		--expect "hello: ckm selftest ok=1" \
+		--expect "hello: socket bad-family ret=-97" \
+		--expect "hello: socket stream ret=-93" \
+		--expect "hello: recvfrom unbound ret=-22" \
+		--expect "hello: socket skip network (no network device)" \
+		--expect "hello: socket PASS=1" \
 		--expect "fs: readback /tmp/hello.txt len=24" \
 		--expect "fs: user data: written by user program" \
 		--expect "user: enter name=probe pid=2" \
@@ -502,6 +522,8 @@ test-driver: image
 #   - `net: dhcp offer yiaddr=10.0.2.15 ...`：DHCP DISCOVER（UDP 68→67 广播）→
 #     OFFER（UDP 67→68）往返，报文里的 yiaddr / server-id / mask / router 都被解析出来
 #     —— 这是 Ethernet → IPv4 → UDP 收发两条路径都通了的证据。
+#   - `net: icmp echo id=0x4242 seq=7 payload=13 reply from 10.0.2.2` + `net: icmp PASS`：
+#     ICMP Echo 请求（IPv4 proto=1）→ 回显**相同载荷**的应答，证明 ICMP 路径也通了。
 test-network: image
 	$(PYTHON) tests/test_boot.py \
 		--nic \
@@ -518,7 +540,24 @@ test-network: image
 		--expect "net: arp PASS" \
 		--expect "net: dhcp offer yiaddr=10.0.2.15" \
 		--expect "net: dhcp PASS" \
-		--expect "net: selftest PASS"
+		--expect "net: icmp echo id=0x4242 seq=7 payload=13 reply from 10.0.2.2" \
+		--expect "net: icmp PASS" \
+		--expect "net: selftest PASS" \
+		--expect "user: net_config ip=10.0.2.15 gateway=10.0.2.2 mac=" \
+		--expect "hello: socket bad-family ret=-97" \
+		--expect "hello: socket stream ret=-93" \
+		--expect "hello: bind on file fd ret=-88" \
+		--expect "hello: recvfrom unbound ret=-22" \
+		--expect "user: socket domain=AF_INET type=SOCK_DGRAM fd=3 id=0" \
+		--expect "hello: bind ret=0" \
+		--expect "hello: bind in-use ret=-98" \
+		--expect "user: sendto fd=3 sport=68 dst=255.255.255.255:67 len=300" \
+		--expect "hello: sendto ret=300" \
+		--expect "user: recvfrom fd=3 src=10.0.2.2:67" \
+		--expect "hello: recvfrom ret=" \
+		--expect "hello: socket dhcp op=2 cookie=1 yiaddr=10.0.2.15" \
+		--expect "hello: socket close ret=0" \
+		--expect "hello: socket PASS=1"
 
 # v0.8 H-03 验收：用 tools/mkfs/mkfs.py 生成「带已知文件集」的 FAT32 测试盘（64 MiB）。
 #
@@ -789,7 +828,7 @@ test-shell: image
 # 断言的是「内核真的把另一个程序跑起来了」，而不是日志措辞：
 #   - `user: fork parent=3 -> child pid=N image_pages=7`：地址空间被复制（7 个映像页 = Shell 的映像）；
 #   - `user: run child pid=N name=fork-child`：子进程在父进程 wait4 时被恢复（单 CPU 的延迟调度）；
-#   - `user: exec pid=N path=/bin/hello ... segments=4 image_pages=6`：映像被换掉，**PID 不变**；
+#   - `user: exec pid=N path=/bin/hello ... segments=4 image_pages=7`：映像被换掉，**PID 不变**；
 #     （页数 6 而不是 5：CKM-1 给 `/bin/hello` 加了「默认拒绝」的自证代码，映像因此长了一页）
 #   - `hello-bin: argc=2` / `argv[0]=hello` / `argv[1]=world`：内核把 argv 写进了新进程的用户栈；
 #   - `user: exec /bin/foo -> ENOENT` + `sh: foo: exit code=127`：
@@ -808,9 +847,16 @@ test-proc: image
 		--key h --key e --key l --key l --key o --key spc \
 		--key w --key o --key r --key l --key d --key ret \
 		--key f --key o --key o --key ret \
+		--key e --key n --key v --key ret \
 		--key e --key x --key i --key t --key ret \
 		--expect "user: program=/bin/sh source=elf" \
 		--expect "hello-bin: Hello from an external program!" \
+		--expect "hello-bin: envc=3" \
+		--expect "hello-bin: env PATH=/bin" \
+		--expect "hello-bin: env HOME=/" \
+		--expect "sh: env PATH=/bin" \
+		--expect "sh: env HOME=/" \
+		--expect "sh: env count=3" \
 		--expect "sh: exec /bin/foo failed errno=-2" \
 		--expect "sh: hello: exit code=1" \
 		--expect "hello-bin: ckm policy_query(fs_write,etc) -> -1 need=0x4" \
@@ -829,7 +875,7 @@ test-proc: image
 		--expect "sh: bye" \
 		--expect "user: heap frame reclamation PASS" \
 		--expect "user: selftest PASS" \
-		--expect-re "user: fork parent=3 -> child pid=([0-9]+) image_pages=7.*?user: run child pid=\1 name=fork-child.*?sh: child pid=\1 exec /bin/hello \(argc=2\).*?user: exec pid=\1 path=/bin/hello segments=4 image_pages=6 entry=0x8000000000.*?hello-bin: pid=\1.*?user: reaped pid=\1 exit=1" \
+		--expect-re "user: fork parent=3 -> child pid=([0-9]+) image_pages=7.*?user: run child pid=\1 name=fork-child.*?sh: child pid=\1 exec /bin/hello \(argc=2\).*?user: exec pid=\1 path=/bin/hello segments=4 image_pages=7 entry=0x8000000000.*?hello-bin: pid=\1.*?user: reaped pid=\1 exit=1" \
 		--expect-re "hello-bin: argc=2.*?hello-bin: argv\[0\]=hello.*?hello-bin: argv\[1\]=world" \
 		--expect-re "user: run child pid=([0-9]+) name=fork-child.*?user: exec /bin/foo -> ENOENT \(no such program\).*?user: reaped pid=\1 exit=127" \
 		--expect-re "user: frames free before=([0-9]+) after=\1"

@@ -39,8 +39,8 @@
 
 use libc::syscall::ARG_MAX;
 use libc::{
-    close, execve, exit, fork, getpid, open, print, println, read, wait4, write, EAGAIN, O_RDONLY,
-    STDIN,
+    close, env_count, env_var, execve, exit, fork, getpid, open, print, println, read, wait4, write,
+    EAGAIN, O_RDONLY, STDIN,
 };
 
 /// 提示符三段：`用户名@主机名称 盘符>`。
@@ -133,6 +133,7 @@ fn dispatch(text: &str) -> bool {
             }
         }
         "pid" => println!("sh: pid={}", getpid()),
+        "env" => cmd_env(),
         "exit" => return false,
         // 其余都当外部程序：解析成 `/bin/<cmd>`（或原样用绝对路径）后 fork/execve/wait4
         _ => cmd_external(cmd, rest),
@@ -161,6 +162,7 @@ fn cmd_help() {
     println!("sh:   echo [args...]  - print arguments (argument splitting is real)");
     println!("sh:   cat <path>      - print a file through open/read/write/close");
     println!("sh:   pid             - pid of this shell (kernel-assigned)");
+    println!("sh:   env             - print environment variables (inherited via execve)");
     println!("sh:   exit            - leave the shell loop");
     println!("sh: anything else runs as an external program via fork/execve/wait4");
     println!("sh:   /bin/hello      - external program (prints its pid + argv)");
@@ -180,6 +182,22 @@ fn cmd_echo(args: &[&str]) {
         print!("{}", arg);
     }
     println!();
+}
+
+/// `env`：打印本进程的环境变量（v1.0：`execve` 传递并默认继承 `envp`）。
+///
+/// 每一项来自内核写进用户栈的 `NAME=VALUE`；Shell 自己的环境由内核顶层运行
+/// 驱动注入（`DEFAULT_ENV`），它 `fork` + `execve` 出来的子进程再原样继承。
+fn cmd_env() {
+    let mut i = 0;
+    while let Some(bytes) = env_var(i) {
+        match core::str::from_utf8(bytes) {
+            Ok(text) => println!("sh: env {}", text),
+            Err(_) => println!("sh: env <not utf-8>"),
+        }
+        i += 1;
+    }
+    println!("sh: env count={}", env_count());
 }
 
 /// `cat <path>`：走一遍真实的文件 syscall（open → read → write → close）。

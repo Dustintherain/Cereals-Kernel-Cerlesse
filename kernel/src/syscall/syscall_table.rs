@@ -31,15 +31,16 @@ use crate::syscall::address_space::UserSpace;
 #[allow(unused_imports)]
 pub use abi::syscall::{
     is_cerlesse_segment, is_linux_segment, unimplemented_name, CERLESSE_SEGMENT_START,
-    LINUX_SEGMENT_END, SYS_BRK, SYS_CKM_AUDIT_READ, SYS_CKM_COMPONENT_STATE,
+    LINUX_SEGMENT_END, SYS_BIND, SYS_BRK, SYS_CKM_AUDIT_READ, SYS_CKM_COMPONENT_STATE,
     SYS_CKM_POLICY_QUERY, SYS_CKM_POLICY_SET, SYS_CLOSE, SYS_EXEC, SYS_EXIT, SYS_FORK,
-    SYS_GETDENTS, SYS_GETPID, SYS_GETPROCS, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_OPEN,
-    SYS_READ, SYS_SLEEP, SYS_STORAGE_ASSIGN_LETTER, SYS_STORAGE_FORMAT, SYS_STORAGE_MOUNT,
-    SYS_STORAGE_RESCAN, SYS_STORAGE_UNMOUNT, SYS_STORAGE_VOLUMES, SYS_WAIT, SYS_WRITE, SYS_MAX,
+    SYS_GETDENTS, SYS_GETPID, SYS_GETPROCS, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NET_CONFIG,
+    SYS_OPEN, SYS_READ, SYS_RECVFROM, SYS_SENDTO, SYS_SLEEP, SYS_SOCKET, SYS_STORAGE_ASSIGN_LETTER,
+    SYS_STORAGE_FORMAT, SYS_STORAGE_MOUNT, SYS_STORAGE_RESCAN, SYS_STORAGE_UNMOUNT,
+    SYS_STORAGE_VOLUMES, SYS_WAIT, SYS_WRITE, SYS_MAX,
 };
 
-/// 系统调用处理函数类型。`args[0..5]` = `rdi, rsi, rdx, r10, r8`。
-pub type SyscallHandler = unsafe fn(args: &[u64; 5], space: *const UserSpace) -> i64;
+/// 系统调用处理函数类型。`args[0..6]` = `rdi, rsi, rdx, r10, r8, r9`。
+pub type SyscallHandler = unsafe fn(args: &[u64; 6], space: *const UserSpace) -> i64;
 
 /// 按系统调用号查表：号越界返回 `None`，否则返回槽位中的 handler
 /// （未实现的号命中 [`syscall_enosys`]）。
@@ -51,7 +52,7 @@ pub fn parse(nid: u64) -> Option<SyscallHandler> {
 }
 
 /// 公共 ENOSYS 桩（`-ENOSYS`，见 `abi::errno`）。
-pub(crate) fn syscall_enosys(_args: &[u64; 5], _space: *const UserSpace) -> i64 {
+pub(crate) fn syscall_enosys(_args: &[u64; 6], _space: *const UserSpace) -> i64 {
     abi::errno::ENOSYS
 }
 
@@ -88,5 +89,12 @@ pub const SYS_TABLE: [SyscallHandler; SYS_MAX as usize] = {
     table[SYS_STORAGE_MOUNT as usize] = crate::syscall::storage::sys_storage_mount;
     table[SYS_STORAGE_UNMOUNT as usize] = crate::syscall::storage::sys_storage_unmount;
     table[SYS_STORAGE_ASSIGN_LETTER as usize] = crate::syscall::storage::sys_storage_assign_letter;
+    // v1.0：UDP 套接字最小集（AF_INET + SOCK_DGRAM）—— socket/bind/sendto/recvfrom
+    table[SYS_SOCKET as usize] = crate::syscall::socket::sys_socket;
+    table[SYS_BIND as usize] = crate::syscall::socket::sys_bind;
+    table[SYS_SENDTO as usize] = crate::syscall::socket::sys_sendto;
+    table[SYS_RECVFROM as usize] = crate::syscall::socket::sys_recvfrom;
+    // v1.0：网络配置导出（DHCP 协商到的本机地址/网关/MAC，Cerlesse 扩展号 267）
+    table[SYS_NET_CONFIG as usize] = crate::syscall::socket::sys_net_config;
     table
 };

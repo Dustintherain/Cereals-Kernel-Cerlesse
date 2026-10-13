@@ -7,7 +7,7 @@
 //! | ---- | ---- |
 //! | 指令 | `syscall`（入口 `IA32_LSTAR` → 内核 `syscall_entry`，见 `kernel/src/syscall/trampoline.rs`） |
 //! | 号 | `rax` |
-//! | 参数 | `rdi, rsi, rdx, r10, r8` |
+//! | 参数 | `rdi, rsi, rdx, r10, r8, r9`（`r9` 是 v1.0 起的第 6 个参数：`mmap` 的 `offset`、`execve` 的 `envp`） |
 //! | 返回 | `rax`；负数 = `-errno`（如 `-38` = `ENOSYS`、`-14` = `EFAULT`） |
 //!
 //! v0.7 的文件 syscall 形状（与 Linux 的差异写在类型里，避免误用）：
@@ -20,9 +20,10 @@
 //!
 //! v0.9 第一步加入用户堆（`mmap` / `munmap` / `brk`，内核侧 `kernel/src/syscall/memory.rs`）：
 //!
-//! - `mmap(len, prot, flags)` 只支持**私有匿名**映射（`MAP_PRIVATE|MAP_ANONYMOUS`），
-//!   且**没有 offset 参数** —— 内核的 syscall ABI 传 5 个参数（`rdi, rsi, rdx, r10, r8`），
-//!   匿名映射不需要偏移；文件映射要先扩 ABI（见内核模块文档）；
+//! - `mmap(len, prot, flags)` 只支持**私有匿名**映射（`MAP_PRIVATE|MAP_ANONYMOUS`）。
+//!   v1.0 起 syscall ABI 扩到第 6 个参数（`r9`），`mmap` 因此有了 `offset` 槽
+//!   （[`mmap_with_offset`]）；匿名映射仍要求 `offset = 0`，非 0 会被内核 `EINVAL`
+//!   拒绝 —— 文件映射（offset 才真正有意义）仍未实现，见内核模块文档；
 //! - `PROT_WRITE|PROT_EXEC` 被内核拒绝（W^X）；`MAP_FIXED` 同样拒绝（固定地址放置未实现），
 //!   `PROT_NONE` 现在合法（v1.0 起可以再 `mprotect` 启用）；
 //! - `brk` 沿用 Linux 语义：**不返回错误**，失败时返回原值（用 `ret < addr` 判断）。
@@ -35,8 +36,10 @@
 //!
 //! - `fork()`：父进程返回子进程 PID、子进程返回 0；子进程从**同一条用户指令**
 //!   继续执行（内核克隆了 `fork` 那一刻的完整寄存器帧）；
-//! - `execve(path, argv)`：换映像，成功后**不返回**；`argv` 用「指针 + 长度」对数组传
-//!   （内核逐段校验后写进新进程的用户栈，见 `libc::args`）；
+//! - `execve(path, argv)`：换映像，成功后**不返回**；`argv`/`envp` 都用「指针 + 长度」
+//!   对数组传（内核逐段校验后写进新进程的用户栈，见 `libc::args` 与 `libc::env`）。
+//!   `execve` 默认让新映像**继承当前环境**（`env`）；要显式替换环境用
+//!   [`execve_env`]；
 //! - `wait4(pid)`：运行并回收直接子进程，返回退出码。
 //!
 //! **v1.0 第一步起没有「号已定义但未实现」的调用了**（`mprotect` 是最后一个，见上）。
@@ -104,6 +107,30 @@ pub const ENOSYS: isize = abi::errno::ENOSYS as isize;
 /// `-ECHILD`：`wait4` 找不到该 PID 的直接子进程。
 pub const ECHILD: isize = abi::errno::ECHILD as isize;
 
+// ---- Socket / 网络类错误（`-errno`，取值见 `abi::errno`）----
+/// `-ENODEV`：没有对应设备（`net_config` 在**没有网卡**时返回它）。
+pub const ENODEV: isize = abi::errno::ENODEV as isize;
+/// `-ENOTSOCK`：fd 有效但不是套接字。
+pub const ENOTSOCK: isize = abi::errno::ENOTSOCK as isize;
+/// `-EMSGSIZE`：报文太长（超过 [`crate::socket::UDP_PAYLOAD_MAX`]）。
+pub const EMSGSIZE: isize = abi::errno::EMSGSIZE as isize;
+/// `-EPROTONOSUPPORT`：协议/类型不支持（例如 `SOCK_STREAM`）。
+pub const EPROTONOSUPPORT: isize = abi::errno::EPROTONOSUPPORT as isize;
+/// `-EOPNOTSUPP`：操作不支持（例如非 0 `flags`）。
+pub const EOPNOTSUPP: isize = abi::errno::EOPNOTSUPP as isize;
+/// `-EAFNOSUPPORT`：地址族不支持（只认 `AF_INET`）。
+pub const EAFNOSUPPORT: isize = abi::errno::EAFNOSUPPORT as isize;
+/// `-EADDRINUSE`：端口已被占用。
+pub const EADDRINUSE: isize = abi::errno::EADDRINUSE as isize;
+/// `-EADDRNOTAVAIL`：`bind` 的地址不是本机地址。
+pub const EADDRNOTAVAIL: isize = abi::errno::EADDRNOTAVAIL as isize;
+/// `-ENETDOWN`：网络不可用（没有网卡 / 尚未 DHCP）。
+pub const ENETDOWN: isize = abi::errno::ENETDOWN as isize;
+/// `-ENOTCONN`：套接字未连接（对 UDP 用 `read`/`write` 会被返回）。
+pub const ENOTCONN: isize = abi::errno::ENOTCONN as isize;
+/// `-EHOSTUNREACH`：目的 MAC 解析不到且没有可用网关。
+pub const EHOSTUNREACH: isize = abi::errno::EHOSTUNREACH as isize;
+
 /// `mmap` / `mprotect` 保护位：不可访问（页帧仍在，可用 [`mprotect`] 再启用）。
 pub const PROT_NONE: i32 = abi::flags::PROT_NONE as i32;
 /// `mmap` / `mprotect` 保护位：可读。
@@ -118,10 +145,22 @@ pub const MAP_PRIVATE: i32 = abi::flags::MAP_PRIVATE as i32;
 /// `mmap` 标志：匿名映射（本内核**只**支持它，且要求 `fd = -1`）。
 pub const MAP_ANONYMOUS: i32 = abi::flags::MAP_ANONYMOUS as i32;
 
-/// 原始系统调用：`rax` = 号，`rdi/rsi/rdx/r10/r8` = 参数，返回 `rax`。
+/// 原始系统调用（5 参数便捷形式）：等价于 [`raw6`]，第 6 个参数固定为 0。
+///
+/// 绝大多数 syscall 只用前 5 个参数；只有 `mmap`（`offset`）与 `execve`（`envp`）
+/// 需要第 6 个，它们直接调用 [`raw6`]。
+///
+/// # Safety
+/// 这是一个裸系统调用：参数与返回值的语义由内核决定（见模块文档）。
+#[inline(always)]
+pub unsafe fn raw(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> isize {
+    unsafe { raw6(nr, a1, a2, a3, a4, a5, 0) }
+}
+
+/// 原始系统调用（完整 6 参数）：`rax` = 号，`rdi/rsi/rdx/r10/r8/r9` = 参数，返回 `rax`。
 ///
 /// **寄存器约定**：与 Linux syscall ABI 一致 —— 一次往返后只有 `rax`（返回值）、
-/// `rcx`、`r11` 变化，其余寄存器（包括 `rdi/rsi/rdx/r10/r8`）保持进入前的值。
+/// `rcx`、`r11` 变化，其余寄存器（包括 `rdi/rsi/rdx/r10/r8/r9`）保持进入前的值。
 /// 内核入口汇编为此在调用 Rust 分发函数前保存 `rdi/rsi/rdx/r10/r8/r9`、
 /// 返回前逐个恢复（见 `kernel/src/syscall/trampoline.rs` 的栈帧注释）。
 ///
@@ -132,7 +171,7 @@ pub const MAP_ANONYMOUS: i32 = abi::flags::MAP_ANONYMOUS as i32;
 /// # Safety
 /// 这是一个裸系统调用：参数与返回值的语义由内核决定（见模块文档）。
 #[inline(always)]
-pub unsafe fn raw(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> isize {
+pub unsafe fn raw6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> isize {
     let ret: u64;
     unsafe {
         core::arch::asm!(
@@ -143,6 +182,7 @@ pub unsafe fn raw(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> isize
             in("rdx") a3,
             in("r10") a4,
             in("r8") a5,
+            in("r9") a6,
             lateout("rcx") _,
             lateout("r11") _,
             options(nostack),
@@ -214,17 +254,46 @@ pub fn brk(addr: u64) -> u64 {
 
 /// `mmap(len, prot, flags)`：匿名映射 `len` 字节，返回页对齐地址或负 errno。
 ///
-/// 内核只接受 `MAP_PRIVATE|MAP_ANONYMOUS`（`fd` 由本函数固定传 -1）、
+/// 内核只接受 `MAP_PRIVATE|MAP_ANONYMOUS`（`fd` 由本函数固定传 -1、`offset` = 0）、
 /// 拒绝 `PROT_WRITE|PROT_EXEC`（W^X）与未知保护位；新页保证**全零**。
 pub fn mmap(len: usize, prot: i32, flags: i32) -> isize {
+    mmap_with_offset(len, prot, flags, 0)
+}
+
+/// `mmap` 的**文件映射**形式（v1.0 第三步）：把 `fd` 指向文件的 `[offset, offset+len)`
+/// 只读地映射进当前进程（`MAP_PRIVATE`，`offset` 必须页对齐）。
+///
+/// 内核只支持**只读私有**文件映射：`fd ≥ 3` 且可读、`flags = MAP_PRIVATE`、
+/// `prot` 不含 `PROT_WRITE`/`PROT_EXEC`。写回文件（`MAP_SHARED`）仍未实现。
+pub fn mmap_file(fd: i32, len: usize, prot: i32, flags: i32, offset: u64) -> isize {
     unsafe {
-        raw(
+        raw6(
+            SYS_MMAP,
+            0, // addr 只是提示
+            len as u64,
+            prot as u64,
+            flags as u64,
+            fd as u64,
+            offset,
+        )
+    }
+}
+
+/// `mmap` 带 `offset` 的形式（v1.0 第 6 参数 `r9`）。
+///
+/// `offset` 只对**文件映射**有意义，而文件映射尚未实现；当前内核只支持匿名映射，
+/// 因此 `offset != 0` 会被**明确拒绝**（`-EINVAL`，串口留一行
+/// `user: mmap rejected (...)`）—— 这是「不假装支持」而不是静默忽略。
+pub fn mmap_with_offset(len: usize, prot: i32, flags: i32, offset: u64) -> isize {
+    unsafe {
+        raw6(
             SYS_MMAP,
             0, // addr 只是提示：内核忽略它（不支持 MAP_FIXED）
             len as u64,
             prot as u64,
             flags as u64,
             u64::MAX, // fd = -1
+            offset,
         )
     }
 }
@@ -262,6 +331,9 @@ pub fn nanosleep(ticks: u64) -> isize {
 /// `execve` 的 `argv` 项数上限（与内核 `syscall::process::ARG_MAX` 一致）。
 pub const ARG_MAX: usize = abi::limits::ARG_MAX as usize;
 
+/// `execve` 的 `envp` 项数上限（与内核 `syscall::process::ENV_MAX` 一致）。
+pub const ENV_MAX: usize = abi::limits::ENV_MAX as usize;
+
 /// `fork()`：复制当前进程。
 ///
 /// - **父进程**：返回子进程 PID（> 0）；
@@ -276,7 +348,7 @@ pub fn fork() -> isize {
     unsafe { raw(SYS_FORK, 0, 0, 0, 0, 0) }
 }
 
-/// `execve(path, argv)`：用 `path` 的映像替换当前进程。
+/// `execve(path, argv)`：用 `path` 的映像替换当前进程（**继承当前环境**）。
 ///
 /// **成功后不返回**（内核换 CR3 + 恢复新入口的帧）；失败返回负 errno，调用方
 /// 通常立刻 [`exit`]（Shell 的 `cmd_external` 就是这么写的）。
@@ -284,7 +356,37 @@ pub fn fork() -> isize {
 /// `argv` 用「指针 + 长度」对数组传递（与 `open`/`write` 的路径同一种风格）：
 /// 内核逐段校验后把字符串与指针数组写进新进程的用户栈。用户态没有堆也能用 ——
 /// 这里的临时数组在栈上。
+///
+/// 环境变量从当前进程（`crate::env`，由 `_start` 从内核拿到、`fork` 之后沿袭）
+/// **原样继承** —— 与 POSIX `execve` 一致；要显式替换环境用 [`execve_env`]。
 pub fn execve(path: &str, argv: &[&str]) -> isize {
+    let count = crate::env::count().min(ENV_MAX);
+    let mut epairs = [0u64; ENV_MAX * 2];
+    for i in 0..count {
+        if let Some(e) = crate::env::env(i) {
+            epairs[i * 2] = e.as_ptr() as u64;
+            epairs[i * 2 + 1] = e.len() as u64;
+        }
+    }
+    exec_impl(path, argv, &epairs, count)
+}
+
+/// `execve` 的显式环境形式：用 `envp` 里的 `NAME=VALUE` 替换新映像的环境。
+///
+/// `envp` 逐项写进新进程用户栈；超过 [`ENV_MAX`] 项或单项超过
+/// [`abi::limits::ENV_MAX_LEN`] 字节会被内核 `-EINVAL`/`-EFAULT` 拒绝。
+pub fn execve_env(path: &str, argv: &[&str], envp: &[&str]) -> isize {
+    let n = envp.len().min(ENV_MAX);
+    let mut epairs = [0u64; ENV_MAX * 2];
+    for (i, e) in envp.iter().take(n).enumerate() {
+        epairs[i * 2] = e.as_ptr() as u64;
+        epairs[i * 2 + 1] = e.len() as u64;
+    }
+    exec_impl(path, argv, &epairs, n)
+}
+
+/// `execve` 的公共实现：`argv` 与 `envp` 都编码成 `(ptr, len)` 对数组后交给内核。
+fn exec_impl(path: &str, argv: &[&str], epairs: &[u64], envc: usize) -> isize {
     let n = argv.len().min(ARG_MAX);
     let mut pairs = [0u64; ARG_MAX * 2];
     for (i, arg) in argv.iter().take(n).enumerate() {
@@ -292,13 +394,14 @@ pub fn execve(path: &str, argv: &[&str]) -> isize {
         pairs[i * 2 + 1] = arg.len() as u64;
     }
     unsafe {
-        raw(
+        raw6(
             SYS_EXEC,
             path.as_ptr() as u64,
             path.len() as u64,
             pairs.as_ptr() as u64,
             n as u64,
-            0,
+            epairs.as_ptr() as u64,
+            envc as u64,
         )
     }
 }
@@ -1000,6 +1103,120 @@ pub fn component_priority(buf: &[u8], index: usize) -> u32 {
         Some(rec) => u32::from_le_bytes(rec[28..32].try_into().unwrap_or([0; 4])),
         None => 0,
     }
+}
+
+// ---------------------------------------------------------------- Socket（v1.0）
+
+/// `socket` 的系统调用号（Linux 同名号）。`AF_INET` + `SOCK_DGRAM` 是本内核支持的组合。
+pub const SYS_SOCKET: u64 = abi::syscall::SYS_SOCKET;
+/// `bind` 的系统调用号（Linux 同名号）。
+pub const SYS_BIND: u64 = abi::syscall::SYS_BIND;
+/// `sendto` 的系统调用号（Linux 同名号）。
+pub const SYS_SENDTO: u64 = abi::syscall::SYS_SENDTO;
+/// `recvfrom` 的系统调用号（Linux 同名号）。
+pub const SYS_RECVFROM: u64 = abi::syscall::SYS_RECVFROM;
+/// `net_config` 的系统调用号（**Cerlesse 扩展号段** 267）。
+pub const SYS_NET_CONFIG: u64 = abi::syscall::SYS_NET_CONFIG;
+/// `net_config` 记录的字节数（必须与内核 `abi::socket::NET_CONFIG_SIZE` 一致）。
+pub const NET_CONFIG_SIZE: usize = abi::socket::NET_CONFIG_SIZE;
+/// `sockaddr_in` 的字节数（必须与内核 `abi::socket::SOCKADDR_IN_SIZE` 一致）。
+pub const SOCKADDR_IN_SIZE: usize = abi::socket::SOCKADDR_IN_SIZE;
+
+use crate::socket::{NetConfig, SockAddrIn};
+
+/// `socket(domain, type, protocol)`：创建一个套接字，返回 fd（≥ 3）或负 errno。
+///
+/// 只支持 `AF_INET` + `SOCK_DGRAM`（UDP）：别的族/类型返回 `-EAFNOSUPPORT` /
+/// `-EPROTONOSUPPORT`。`protocol` 传 [`crate::socket::IPPROTO_IP`]（0，由内核按类型选）
+/// 或 [`crate::socket::IPPROTO_UDP`]。
+pub fn socket(domain: u16, ty: u32, protocol: u32) -> isize {
+    unsafe {
+        raw(
+            SYS_SOCKET,
+            domain as u64,
+            ty as u64,
+            protocol as u64,
+            0,
+            0,
+        )
+    }
+}
+
+/// `bind(fd, addr)`：把套接字绑到本机地址/端口（`addr.port() == 0` 让内核分配临时端口）。
+pub fn bind(fd: i32, addr: &SockAddrIn) -> isize {
+    unsafe {
+        raw(
+            SYS_BIND,
+            fd as u64,
+            addr.as_bytes().as_ptr() as u64,
+            addr.as_bytes().len() as u64,
+            0,
+            0,
+        )
+    }
+}
+
+/// `sendto(fd, buf, dst)`：向 `dst` 发一个 UDP 数据报，返回发送字节数或负 errno。
+///
+/// 内核要求 `buf` 可读，长度不超过 [`crate::socket::UDP_PAYLOAD_MAX`]（超长 `-EMSGSIZE`）。
+/// 套接字尚未 `bind` 时内核自动分配一个临时端口（隐式 bind）。
+pub fn sendto(fd: i32, buf: &[u8], dst: &SockAddrIn) -> isize {
+    unsafe {
+        raw6(
+            SYS_SENDTO,
+            fd as u64,
+            buf.as_ptr() as u64,
+            buf.len() as u64,
+            0,
+            dst.as_bytes().as_ptr() as u64,
+            SOCKADDR_IN_SIZE as u64,
+        )
+    }
+}
+
+/// `recvfrom(fd, buf, src)`：收一个 UDP 数据报，返回字节数或负 errno。
+///
+/// `src` 非 `None` 时把发送方地址写回它；超时（约 2 秒）返回 `-EAGAIN`，
+/// 未 `bind` 返回 `-EINVAL`。`buf` 比数据报短时按 `buf` 截断。
+pub fn recvfrom(fd: i32, buf: &mut [u8], src: Option<&mut SockAddrIn>) -> isize {
+    match src {
+        Some(addr) => {
+            // socklen_t 是 u32：进时是缓冲长度，出时是实际长度（内核按 POSIX 语义回填）。
+            let mut addrlen: u32 = SOCKADDR_IN_SIZE as u32;
+            let addr_ptr = addr.bytes.as_mut_ptr() as u64;
+            unsafe {
+                raw6(
+                    SYS_RECVFROM,
+                    fd as u64,
+                    buf.as_mut_ptr() as u64,
+                    buf.len() as u64,
+                    0,
+                    addr_ptr,
+                    &mut addrlen as *mut u32 as u64,
+                )
+            }
+        }
+        None => unsafe {
+            raw6(
+                SYS_RECVFROM,
+                fd as u64,
+                buf.as_mut_ptr() as u64,
+                buf.len() as u64,
+                0,
+                0,
+                0,
+            )
+        },
+    }
+}
+
+/// `net_config(cfg)`：把内核 DHCP 协商到的网络配置（本机地址/网关/MAC）写进 `cfg`。
+///
+/// 没有网卡（或 DHCP 尚未成功）返回 `-ENODEV` —— 用户程序据此跳过网络相关自测。
+pub fn net_config(cfg: &mut NetConfig) -> isize {
+    let len = cfg.bytes.len();
+    let ptr = cfg.bytes.as_mut_ptr() as u64;
+    unsafe { raw(SYS_NET_CONFIG, ptr, len as u64, 0, 0, 0) }
 }
 
 /// `exit(code)`：结束当前进程并把退出码交回内核。

@@ -13,8 +13,8 @@
 //! 4. [`return_to_suspended`]：从用户态回到暂停在 [`RunCtx`] 上的内核调用者
 //!    （`sys_exit` 与 ring3 异常终止路径）。
 //!
-//! 约定（与 `syscall/mod.rs` 一致）：`rax` = syscall 号，`rdi/rsi/rdx/r10/r8` =
-//! 第 1..5 参数，返回值在 `rax`。
+//! 约定（与 `syscall/mod.rs` 一致）：`rax` = syscall 号，`rdi/rsi/rdx/r10/r8/r9` =
+//! 第 1..6 参数（`r9` 是 v1.0 起的扩展槽），返回值在 `rax`。
 //!
 //! **寄存器保存规则（与 Linux syscall ABI 一致，用户态可以依赖）**：一次 `syscall`
 //! 往返后，除 `rax`（返回值）、`rcx`（被指令写成用户 RIP）、`r11`（用户 RFLAGS）
@@ -73,10 +73,28 @@ const _: () = assert!(USER_FRAME_SIZE == 128);
 impl UserFrame {
     /// 新建「从 `entry` 开始、用户栈顶 `rsp`」的初始帧。
     ///
-    /// `argc`/`argv` 按本内核的入口 ABI 放在 `rdi`/`rsi`（`libc` 的 `_start`
-    /// 把两者存进全局后再调用 `main`）—— Linux 是放在栈上，两种都行，这里选
-    /// 寄存器是因为总入口是我们自己的 `_start`。
-    pub const fn new_user(entry: u64, rsp: u64, argc: u64, argv: u64) -> Self {
+    /// `argc`/`argv`/`envc`/`envp` 按本内核的入口 ABI 放在寄存器里：
+    ///
+    /// ```text
+    /// rdi = argc   rsi = argv   rdx = envc   r10 = envp
+    /// ```
+    ///
+    /// `libc` 的 `_start` 把 `r10`（`envp`）搬到 `rcx` 后调用 `cer_start`，于是四个值
+    /// 正好落在 C 调用约定的前四个整数寄存器（`rdi, rsi, rdx, rcx`）上。选寄存器而不是
+    /// 栈，是因为总入口是我们自己的 `_start`（Linux 把 `argv`/`envp` 放在用户栈顶，
+    /// 两种对用户程序都透明）。
+    ///
+    /// **为什么 `envp` 用 `r10` 而不是 `rcx`**：`rcx` 在 `syscall`/`sysret` 往返里被
+    /// 硬件当作用户 RIP，帧恢复时它载入的是入口地址（见 `UserFrame` 布局）——拿它当
+    /// 参数会和返回地址打架。`r10` 是普通易失寄存器，恢复后就是我们要的值。
+    pub const fn new_user(
+        entry: u64,
+        rsp: u64,
+        argc: u64,
+        argv: u64,
+        envc: u64,
+        envp: u64,
+    ) -> Self {
         Self {
             user_rsp: rsp,
             r15: 0,
@@ -87,8 +105,8 @@ impl UserFrame {
             rbx: 0,
             rdi: argc,
             rsi: argv,
-            rdx: 0,
-            r10: 0,
+            rdx: envc,
+            r10: envp,
             r8: 0,
             r9: 0,
             rax: 0,

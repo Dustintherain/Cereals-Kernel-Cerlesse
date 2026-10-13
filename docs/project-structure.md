@@ -40,8 +40,8 @@ Cerlesse/
 │   │   │                        #    ✅ v0.9 第四步：net（NetworkDevice 抽象）+ virtio_net（legacy 网卡驱动）
 │   │   ├── time/                # timer/clock
 │   │   ├── ipc/                 # pipe/channel/shared_memory
-│   │   ├── network/             # ✅ v0.9 第四步：ethernet/arp/ipv4/udp/dhcp + mod（Stack + selftest）
-│   │   │                        #    tcp/socket 仍为占位（完整 TCP/IP 是第一版非目标）
+│   │   ├── network/             # ✅ v0.9 第四步 + v1.0 第四步：ethernet/arp/ipv4/udp/dhcp/icmp + mod（Stack + selftest + NetConfig/udp_send/udp_recv_poll）+ socket（UDP 套接字表）
+│   │   │                        #    tcp 仍为占位（完整 TCP/IP 是第一版非目标）
 │   │   ├── security/            # permission/credential/capability
 │   │   └── main.rs              # 内核入口（v0.1 ✅：_start + kernel_main）
 │   ├── link.ld                  # 链接脚本：装载到 32MiB（ADR-007）
@@ -95,7 +95,7 @@ Cerlesse/
 | `kernel/src/time/` | PIT/APIC Timer、系统时钟、sleep/yield | v0.4 |
 | `kernel/src/process/` | 进程/线程模型、PID、状态机 | v0.5 |
 | `kernel/src/scheduler/` | 调度队列、Round Robin | v0.5 |
-| `kernel/src/syscall/` | 系统调用入口/分发、用户地址空间、ELF Loader、首批与文件 syscall、**用户堆（`memory.rs`：`brk`/`mmap`/`munmap`）**、**进程调用（`process.rs`：`fork`/`execve`/`wait4` + argv 用户栈 + `getprocs`）**、**目录枚举（`dir.rs`：`getdents`）**、**最小动态链接（`dynamic.rs`：`ET_DYN`/`PT_INTERP`/`DT_NEEDED`/重定位）** | v0.6–v0.7 ✅ / v0.9 第一·三·五·六步 ✅ |
+| `kernel/src/syscall/` | 系统调用入口/分发（v1.0 起 6 个参数，第 6 个 `r9`）、用户地址空间、ELF Loader、首批与文件 syscall、**用户堆+文件映射（`memory.rs`：`brk`/`mmap`（匿名 + 只读文件映射，含 `offset`）/`munmap`）**、**进程调用（`process.rs`：`fork`/`execve`（argv+envp 用户栈）/`wait4` + `getprocs`）**、**目录枚举（`dir.rs`：`getdents`）**、**最小动态链接（`dynamic.rs`：`ET_DYN`/`PT_INTERP`/`DT_NEEDED`/重定位）**、**UDP 套接字（`socket.rs`：`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）** | v0.6–v0.7 ✅ / v0.9 第一·三·五·六步 ✅ / v1.0 第四步 ✅ |
 | `kernel/src/fs/` | VFS 抽象（trait + 路径工具）、挂载表路由、RAMFS、fd 表、**FAT12/16/32 只读后端**；**CSS-2 收口：后端能力位/卷信息、挂载表带卷身份与多挂载点、卸载、挂载错误改 errno** | v0.7 ✅ / v0.8 ✅ / CSS-2 ✅ |
 | `kernel/src/driver/` | 串口（v0.1）、键盘（v0.4）、**驱动注册框架 / PCI 枚举 / 块设备抽象 / virtio-blk**（v0.8 ✅） | v0.4 / v0.8 |
 | `kernel/src/driver/{pci,driver,block,virtio_blk}.rs` | `pci` 只回答「总线上有什么」；`driver` 回答「谁来管它」（`Driver` trait + `probe_all`）；`block` 是上层唯一可见的按扇区接口；`virtio_blk` 是具体实现（同时实现 `Driver` 与 `BlockDevice`） | v0.8 ✅ |
@@ -103,10 +103,10 @@ Cerlesse/
 | `kernel/src/memory/frame.rs` | 位图帧分配器；v0.8 追加 `allocate_contiguous` / `free_contiguous`（virtqueue 与 DMA 要求的物理连续缓冲） | v0.3 ✅ / v0.8 ✅ |
 | `kernel/src/arch/x86_64/port.rs` | 端口 I/O 统一入口：`inb/inw/inl` + `outb/outw/outl`（PCI 配置空间与 legacy virtio 寄存器窗口依赖 32 位读写） | v0.8 ✅ |
 | `kernel/src/ipc/` | 管道、通道、共享内存 | v0.5+ |
-| `kernel/src/network/` | 以太网 → IP → TCP/UDP → Socket | v0.9 |
+| `kernel/src/network/` | 以太网 → ARP → IPv4 → UDP/ICMP + **UDP 套接字表（`socket.rs`）**；TCP 仍为占位 | v0.9 ✅ / v1.0 第四步 ✅ |
 | `kernel/src/security/` | 权限、凭证（uid/gid）、文件 mode 判定；**能力位与 CKM 判定点见 `kernel/src/ckm/`**（规划） | v1.0 |
 | `userland/` | **用户态独立 workspace**（不属于内核）：`libc/`（运行时）+ `user/*`（程序）+ `Makefile`（构建 + ELF 校验 + `manifest.txt`）+ `.cargo/config.toml`（large 代码模型只对用户态生效）；含 `pkgmgr/`（包管理器主机工具，阶段五迁入）与 `tools/`（`check_dyn_fixture.py`、`check_user_elf.py`）；与内核的唯一接触面是 `build/userland/images/` | 纯内核化 ✅ |
-| `userland/libc/` | 最小用户态运行时：syscall 封装（含 `open/read/close`、`brk/mmap/munmap` 与 `fork/execve/wait4`）、`_start`（入口寄存器 `argc`/`argv`）、`print!/println!`、panic handler、`heap`（`#[global_allocator]`）、`args` | v0.6 ✅ / v0.7 ✅ / v0.9 ✅ |
+| `userland/libc/` | 最小用户态运行时：syscall 封装（含 `open/read/close`、`brk/mmap/munmap` 与 `fork/execve/wait4`）、`_start`（入口寄存器 `argc`/`argv`/`envc`/`envp`）、`print!/println!`、panic handler、`heap`（`#[global_allocator]`）、`args`、`env` | v0.6 ✅ / v0.7 ✅ / v0.9 ✅ / v1.0 ✅ |
 | `userland/user/` | 用户程序（`hello` ✅ v0.6/v0.7 → `/init`；`shell` ✅ v0.9 → `/bin/sh`；`hello-bin` ✅ v0.9 第三步 → `/bin/hello`（外部程序）；**`ls` / `cat` / `echo` / `ps` ✅ v0.9 第五步 → `/bin/*`**；**`dynhello/` ✅ v0.9 第六步 —— 不是 Rust crate，而是 `as`+`ld` 现编的动态链接夹具 → `/bin/dynhello` + `/lib/{ld.so,libgreet.so}`**；`init/` 仍为占位） | v0.6–v0.9 |
 | `tools/`（Python） | 镜像构建、**`check-boundary.py`（内核/用户态边界门禁，纯内核化 ✅）**、`mkfs/` FAT 镜像生成（v0.8 ✅）；归属用户态的 `check_user_elf.py` 与 `pkgmgr/` 已于**阶段五**迁入 `userland/` | v0.1 起 / 阶段五 ✅ |
 | `tools-go/`（Go） | 测试编排、串口日志服务 | v0.4 起 |
@@ -195,6 +195,7 @@ time,process,scheduler,fs,driver,network,ipc,security}`、`boot/`、`shared/` �
 
 | 日期 | 变更 |
 | ---- | ---- |
+| 2026-10-13 | **v1.0 第四步：UDP 套接字最小集** —— 目录树 `network/` 行补 `icmp`/`socket` 与 `mod` 的 `NetConfig`/`udp_send`/`udp_recv_poll`，`syscall/` 行补 `socket.rs`（`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）；模块表 `kernel/src/network/` 行更新 |
 | 2026-10-12 | **纯内核化阶段三：`abi/` 单一事实源** —— 目录树新增 `abi/`（`syscall`/`errno`/`flags`/`limits`/`dirent`/`procinfo`/`volume`/`ckm`/`record`），根 `Cargo.toml` 变为 `shared/boot/abi/kernel`，模块表新增 `abi/` 行；第 4 节由「`abi/` 尚未创建」改为「已落地」；内核 18 文件与 libc 45 常量改为引用它（`make abi-check`） |
 | 2026-10-12 | **CKM-2**：`kernel/src/ckm/` 新增 `overlay.rs`（覆盖层注册表）与 `store.rs`（状态区）；3.1 节由「尚未创建」改为「已落地/待建」；`tools/image-builder/build_image.py` 的镜像布局（FAT 63 MiB + 状态区 1 MiB）与新增 `tests/test_ckm_store.py` |
 | 2026-10-11 | v1.0 之后规划：新增第 3.2 节（**CSS 存储管理**预计新开/扩展的目录：`kernel/src/storage/`、`syscall/storage.rs`、`fs/{exfat,ext2,ext4,ntfs,iso9660}/`、libc 路径模块、`ckm storage`、`mkfs` 分区表生成 —— 均未创建，进入 CSS-1…CSS-6 时回填） |

@@ -15,7 +15,7 @@
 
 ## 这是什么
 
-Cerlesse 是一个**从零实现**的 x86_64 宏内核（monolithic kernel，`no_std` Rust、不依赖任何第三方 crate）：UEFI 引导、4 级页表与物理帧分配器、中断与时钟、进程与 Round Robin 调度、`syscall`/`sysret` 快速路径与 ring3 隔离、VFS + RAMFS + FAT12/16/32、PCI 枚举与 legacy virtio 驱动、用户态 Shell 与基础工具、Ethernet/ARP/IPv4/UDP 网络栈、内核侧动态链接、GPT/MBR 分区与卷识别 —— 每一层都是自己写的。
+Cerlesse 是一个**从零实现**的 x86_64 宏内核（monolithic kernel，`no_std` Rust、不依赖任何第三方 crate）：UEFI 引导、4 级页表与物理帧分配器、中断与时钟、进程与 Round Robin 调度、`syscall`/`sysret` 快速路径与 ring3 隔离、VFS + RAMFS + FAT12/16/32、PCI 枚举与 legacy virtio 驱动、用户态 Shell 与基础工具、Ethernet/ARP/IPv4/UDP + ICMP(ping) 网络栈与 UDP 套接字最小集（`socket`/`bind`/`sendto`/`recvfrom`）、内核侧动态链接、GPT/MBR 分区与卷识别 —— 每一层都是自己写的。
 
 它不是 Linux 的替代品，也不是只会打印一行字的骨架：`make run` 之后，QEMU 串口（也就是你的终端）会给出一个**真能用的 Shell** —— `ls` / `ps` / `cat` / `echo` 都是独立用户程序，由 Shell 的 `fork` + `execve` 起来，`wait4` 回收退出码。
 

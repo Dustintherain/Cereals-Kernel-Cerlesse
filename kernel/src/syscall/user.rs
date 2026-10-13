@@ -88,6 +88,13 @@ pub const LDSO_PATH: &str = "/lib/ld.so";
 /// 共享库路径（`DT_NEEDED=libgreet.so` → `/lib/libgreet.so`）。
 pub const LIBGREET_PATH: &str = "/lib/libgreet.so";
 
+/// 顶层程序（`/init` / `/bin/sh` / `/bin/dynhello`）启动时注入的**默认环境变量**。
+///
+/// 内核直接运行的程序没有父进程可继承环境，因此由这里给出一个最小集合；
+/// 之后 `fork`/`execve` 都由 `libc` 原样继承（见 `libc::env`），用户程序因此
+/// 在任意深度都能拿到 `PATH`/`HOME`。这三项也是 `make test-proc` 断言的依据。
+pub const DEFAULT_ENV: [&[u8]; 3] = [b"PATH=/bin", b"HOME=/", b"TERM=cerlesse"];
+
 global_asm!(
     ".align 16",
     // ---- probe：越权读取内核映像（0x200_0000）→ 应被 #PF 拦截 ----
@@ -230,6 +237,8 @@ unsafe fn run_process(
     serial::println("");
 
     fs::file::reset();
+    // 套接字与文件共用 fd 编号空间：换程序时也要把套接字表清干净（fd 不泄漏）。
+    crate::network::socket::reset();
     unsafe {
         EXIT_CODE = -1;
         process::set_current_index(slot);
@@ -270,9 +279,15 @@ fn run_from_vfs(name: &'static str, path: &'static str, pid: u64) -> Result<(), 
     serial::print_hex(stats.entry);
     serial::println("");
 
-    // 顶层程序的 argv 就是它自己（`argv[0] = path`）—— 与外部程序走的是同一条路
-    let frame = crate::syscall::process::user_frame_for(&space, stats.entry, &[path.as_bytes()])
-        .map_err(|_| "user: argv stack build failed")?;
+    // 顶层程序的 argv 就是它自己（`argv[0] = path`）—— 与外部程序走的是同一条路；
+    // 环境变量用内核默认集合（顶层程序没有父进程可继承）。
+    let frame = crate::syscall::process::user_frame_for(
+        &space,
+        stats.entry,
+        &[path.as_bytes()],
+        &DEFAULT_ENV,
+    )
+    .map_err(|_| "user: argv/envp stack build failed")?;
     // 初始凭证来自 CKM 组件表（`docs/ckm.md` 3.1 的固定主体划分）。
     let cred = crate::ckm::api::program_cred(path);
     unsafe { run_process(name, pid, "elf", cred, space, frame) }
@@ -293,7 +308,7 @@ fn run_raw(name: &'static str, code: &'static [u8], pid: u64) -> Result<(), &'st
     serial::print_hex(entry);
     serial::println("");
 
-    let frame = UserFrame::new_user(entry, USER_STACK_TOP, 0, 0);
+    let frame = UserFrame::new_user(entry, USER_STACK_TOP, 0, 0, 0, 0);
     // 手写机器码（隔离探针）没有组件表项：按最小权限（普通用户）启动。
     unsafe { run_process(name, pid, "asm", crate::security::Cred::plain(), space, frame) }
 }
