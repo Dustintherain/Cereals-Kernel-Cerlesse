@@ -37,9 +37,28 @@ pub const PROT_EXEC: u64 = 0x4;
 /// 已知保护位掩码（`prot & !PROT_MASK != 0` → `EINVAL`）。
 pub const PROT_MASK: u64 = PROT_READ | PROT_WRITE | PROT_EXEC;
 
-/// `mmap`：私有映射。
+/// `mmap`：**共享**映射（写回文件，v1.0 第五步）。
+///
+/// 文件映射下它与 [`MAP_PRIVATE`] 互斥：`MAP_SHARED` 的页在 `msync` / `munmap`
+/// 时把内容写回文件，`MAP_PRIVATE` 的改写只留在本进程。**匿名**共享映射
+/// （`MAP_SHARED|MAP_ANONYMOUS`）仍未实现（那需要 `fork` 之间真正共享页帧）。
+pub const MAP_SHARED: u64 = 0x1;
+/// `mmap`：私有映射（写时复制语义：改写不落盘）。
 pub const MAP_PRIVATE: u64 = 0x2;
-/// `mmap`：匿名映射（本内核**只**支持它，且要求 `fd = -1`）。
+/// `mmap` 的**映射类型**位（`MAP_SHARED` 与 `MAP_PRIVATE` 互斥，二选一）。
+pub const MAP_TYPE: u64 = MAP_SHARED | MAP_PRIVATE;
+/// `mmap`：匿名映射（要求 `fd = -1`；只与 [`MAP_PRIVATE`] 组合）。
 pub const MAP_ANONYMOUS: u64 = 0x20;
-/// `mmap`：接受的**全部**标志位（`MAP_FIXED`/`MAP_SHARED` 等一律 `EINVAL`）。
-pub const MAP_SUPPORTED: u64 = MAP_PRIVATE | MAP_ANONYMOUS;
+/// `mmap`：接受的**全部**标志位（`MAP_FIXED` 等一律 `EINVAL`）。
+pub const MAP_SUPPORTED: u64 = MAP_TYPE | MAP_ANONYMOUS;
+/// `mmap`：**匿名**映射接受的全部标志位（`MAP_SHARED|MAP_ANONYMOUS` 仍未实现）。
+pub const MAP_ANON_SUPPORTED: u64 = MAP_PRIVATE | MAP_ANONYMOUS;
+
+/// `msync`：只把数据交给回写、不等它落盘（本内核同步写回，等价于 [`MS_SYNC`]）。
+pub const MS_ASYNC: u64 = 0x1;
+/// `msync`：让同一文件的其它映射副本失效（本内核没有页缓存，接受并忽略）。
+pub const MS_INVALIDATE: u64 = 0x2;
+/// `msync`：写回并等待完成。
+pub const MS_SYNC: u64 = 0x4;
+/// `msync`：接受的**全部**标志位（未知位一律 `EINVAL`）。
+pub const MS_SUPPORTED: u64 = MS_ASYNC | MS_INVALIDATE | MS_SYNC;

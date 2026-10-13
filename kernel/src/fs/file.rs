@@ -205,6 +205,20 @@ pub fn is_readable(fd: i32) -> bool {
     })
 }
 
+/// 某个已打开的 fd 是否**可写**（`mmap` 的 `MAP_SHARED|PROT_WRITE` 用它拒绝只读打开的 fd：
+/// 共享映射的改动要写回文件，只读 fd 说明调用方无意落盘 —— 早失败比 `msync` 时才失败清楚）。
+pub fn is_writable(fd: i32) -> bool {
+    with_table(|t| {
+        t.slots
+            .get(fd as usize)
+            .and_then(|slot| match slot {
+                Some(Slot::File(h)) => Some(h.mode.writable()),
+                _ => None,
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// `read(fd, buf)`：从当前偏移读入 `buf`，推进偏移。
 pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize, i64> {
     with_table(|t| {

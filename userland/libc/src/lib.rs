@@ -66,7 +66,8 @@ pub use crate::syscall::{
     ckm_record_pid, ckm_record_seq, ckm_record_uid, close, component_abi_kernel, component_id,
     component_kind, component_kind_name, component_priority, component_state, component_state_name,
     component_version_code, dirent_is_dir, dirent_name, dirent_size, execve, execve_env, exit, fork,
-    getdents, getpid, getprocs, mmap, mmap_file, mmap_with_offset, mprotect, munmap, nanosleep,
+    getdents, getpid, getprocs, mmap, mmap_file, mmap_with_offset, mprotect, msync, munmap,
+    nanosleep,
     net_config, open, raw6, procinfo_name, procinfo_pid, recvfrom, sendto, socket,
     procinfo_ppid, procinfo_state, read, storage_assign_letter, storage_mount, storage_rescan,
     storage_unmount, storage_volumes, volume_disk, volume_free_bytes, volume_fs, volume_health,
@@ -82,10 +83,10 @@ pub use crate::syscall::{
     EADDRINUSE, EADDRNOTAVAIL, EAFNOSUPPORT, EAGAIN, EBADF, ECHILD, EFAULT, EHOSTUNREACH, EINVAL,
     EISDIR, EMSGSIZE, ENETDOWN, ENODEV, ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTCONN, ENOTSOCK,
     EOPNOTSUPP, EPERM, EPROTONOSUPPORT,
-    MAP_ANONYMOUS, MAP_PRIVATE, MAX_COMPONENTS, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY,
-    PROCINFO_NAME_MAX, PROCINFO_SIZE, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE, STDERR, STDIN,
-    STDOUT, STORAGE_LETTER_NONE, STORAGE_MOUNT_RDONLY, STORAGE_RESCAN_ALL, VOLUME_FREE_UNKNOWN,
-    VOLUME_LABEL_MAX, VOLUME_RECORD_SIZE,
+    MAP_ANONYMOUS, MAP_PRIVATE, MAP_SHARED, MAX_COMPONENTS, MS_ASYNC, MS_INVALIDATE, MS_SYNC,
+    O_CREAT, O_RDONLY, O_RDWR, O_WRONLY, PROCINFO_NAME_MAX, PROCINFO_SIZE, PROT_EXEC, PROT_NONE,
+    PROT_READ, PROT_WRITE, STDERR, STDIN, STDOUT, STORAGE_LETTER_NONE, STORAGE_MOUNT_RDONLY,
+    STORAGE_RESCAN_ALL, VOLUME_FREE_UNKNOWN, VOLUME_LABEL_MAX, VOLUME_RECORD_SIZE,
 };
 
 // CSS-3：Windows 式路径（`C:\x`）→ POSIX 路径的重写。用户程序用 `libc::path::resolve`。

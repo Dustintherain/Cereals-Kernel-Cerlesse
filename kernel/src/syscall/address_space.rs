@@ -32,7 +32,7 @@
 //!                                  └── ELF PT_LOAD 落在这里，按段权限逐页映射
 //! 0x0000_0080_0000_0000 + 0x10000 页 16..19  用户栈（16 KiB，RW、NX）
 //! 0x0000_0080_0000_0000 + 0x20000 页 32..95  brk 堆窗口（256 KiB，按需映射，RW、NX）
-//! 0x0000_0080_0000_0000 + 0x60000 页 96..159 匿名 mmap 窗口（256 KiB，first-fit，RW 或 RX）
+//! 0x0000_0080_0000_0000 + 0x60000 页 96..159 mmap 窗口（256 KiB，first-fit，匿名或文件映射，RW/RX）
 //! 0x0000_0080_0000_0000 + 0x100000 页 256..287 共享库窗口（128 KiB，v0.9 动态链接）
 //! ```
 //!
@@ -47,8 +47,12 @@
 //!
 //! - **brk 堆窗口**：`brk(addr)` 增长/收缩堆顶，`addr == 0` 时只查询当前堆顶
 //!   （Linux 语义：**不返回错误**，失败时返回原值 ⇒ 调用方用 `ret < addr` 判断）；
-//! - **匿名 mmap 窗口**：`mmap` 在窗口内做 first-fit 连续分配、`munmap` 整段归还；
-//!   只支持 `MAP_PRIVATE|MAP_ANONYMOUS` 的匿名页，且拒绝 `PROT_WRITE|PROT_EXEC`（W^X）。
+//! - **mmap 窗口**：`mmap` 在窗口内做 first-fit 连续分配、`munmap` 整段归还。
+//!   三种映射共用这个窗口：匿名（`MAP_PRIVATE|MAP_ANONYMOUS`）、
+//!   **文件**（v1.0 第三步只读、第五步可写：`MAP_PRIVATE` 的改动只留在本进程，
+//!   `MAP_SHARED` 的页在 `msync`/`munmap` 时**写回文件**——描述符见 [`MmapFileDesc`]，
+//!   每段一片 `path`、`offset`、`file_len`，上限 [`MMAP_FILES_MAX`] 段）。
+//!   一律拒绝 `PROT_WRITE|PROT_EXEC`（W^X）。
 //!
 //! 三条只有实测才能确认的性质，验收脚本就断言它们：
 //!
@@ -84,6 +88,7 @@
 use crate::arch::x86_64::paging::{
     self, entry_address, table_index, write_entry, HUGE, NO_EXEC, PRESENT, USER, WRITABLE,
 };
+use crate::fs::vfs;
 use crate::fs::vfs::{EINVAL, ENOMEM};
 use crate::memory::frame::{self, PhysFrame};
 use crate::memory::page::PAGE_SIZE;
@@ -134,6 +139,18 @@ pub const USER_DYN_PAGES: usize = 32;
 /// 共享库窗口字节上限。
 pub const USER_DYN_MAX: u64 = USER_DYN_PAGES as u64 * PAGE_SIZE;
 
+/// `MAP_SHARED` 文件映射**描述符**上限：每个地址空间最多这么多段并发的共享文件映射。
+///
+/// 为什么要上限：描述符要**保存在 `UserSpace` 里**（它随进程走、`fork` 时随子进程复制），
+/// 而 `UserSpace` 是按值搬来搬去的固定大小结构（见 `process::Process`）。用一张 4 槽的
+/// 小表 + 每段一条路径，换掉「每页存一份路径」的 16 KiB。
+/// 超出上限的 `mmap` 返回 `-ENOMEM`（串口写明原因），而不是悄悄退化成 `MAP_PRIVATE`。
+pub const MMAP_FILES_MAX: usize = 4;
+
+/// 描述符里保存的路径长度上限（字节）。超过这个长度的文件映射在 syscall 层被 `EINVAL`
+/// 拒绝（串口留原因）—— 路径本身的上限仍是 `abi::limits::PATH_MAX`，这里只是描述符的容量。
+pub const MMAP_FILE_PATH_MAX: usize = 128;
+
 /// `PROT_*`：用户内存保护位（与 Linux 一致）—— **再导出**，位值定义在 `abi::flags`
 /// （阶段三的单一事实源：内核与 libc 引用同一处，不再“各写一份 + 注释提醒”）。
 ///
@@ -162,6 +179,41 @@ pub struct LoadStats {
     pub writable_pages: usize,
 }
 
+/// 一个 `MAP_SHARED` 文件映射的描述（v1.0 第五步：写回用）。
+///
+/// `MAP_PRIVATE` 的文件映射**不需要**它：那类页与匿名页同构（改了什么也不落盘），
+/// 因此只有 `MAP_SHARED` 才占描述符槽位。`file_len` 是 `mmap` **那一刻**的文件大小，
+/// 也是写回的上限 —— 映射比文件长是合法的（尾部补零），但写回不能把文件撑大。
+#[derive(Clone, Copy)]
+struct MmapFileDesc {
+    /// 映射在 mmap 窗口里的起始页号（0-based）
+    start: u8,
+    /// 映射占用的页数
+    pages: u8,
+    /// 映射起始处的文件偏移（页对齐）
+    offset: u64,
+    /// `mmap` 时的文件大小（写回上限）
+    file_len: u64,
+    /// 文件路径（写回时用；`path_len` 有效）
+    path: [u8; MMAP_FILE_PATH_MAX],
+    /// `path` 里的有效字节数
+    path_len: u8,
+}
+
+impl MmapFileDesc {
+    /// 这个描述符里的页号区间是否包含窗口页 `page`。
+    fn covers(&self, page: usize) -> bool {
+        let start = self.start as usize;
+        page >= start && page < start + self.pages as usize
+    }
+
+    /// 描述符里的路径（`&str`）。写回时的路径来自这里，而不是调用方现在拿着的 fd ——
+    /// 映射的有效性与 fd 的开关无关（POSIX：`close(fd)` 之后映射照样有效）。
+    fn path(&self) -> &str {
+        core::str::from_utf8(&self.path[..self.path_len as usize]).unwrap_or("/")
+    }
+}
+
 /// 用户地址空间：一整套可由 CR3 切换的页表 + 用户页帧的所有权。
 pub struct UserSpace {
     /// PML4（本模块拥有）
@@ -188,6 +240,8 @@ pub struct UserSpace {
     mmap: [Option<PhysFrame>; USER_MMAP_PAGES],
     /// 每个 mmap 页的映射标志（`PRESENT` 位为 0 表示该页空闲），用于缓冲校验
     mmap_flags: [u64; USER_MMAP_PAGES],
+    /// `MAP_SHARED` 文件映射的写回描述符（`None` = 空槽）
+    mmap_files: [Option<MmapFileDesc>; MMAP_FILES_MAX],
     /// 共享库窗口页帧（v0.9 动态链接；`None` = 未映射）
     dyn_pages: [Option<PhysFrame>; USER_DYN_PAGES],
     /// 每个共享库页的映射标志（`PRESENT` 位为 0 表示未映射），用于缓冲校验
@@ -294,6 +348,7 @@ impl UserSpace {
             brk: USER_HEAP_VIRT,
             mmap: [None; USER_MMAP_PAGES],
             mmap_flags: [0; USER_MMAP_PAGES],
+            mmap_files: [None; MMAP_FILES_MAX],
             dyn_pages: [None; USER_DYN_PAGES],
             dyn_flags: [0; USER_DYN_PAGES],
         })
@@ -507,6 +562,10 @@ impl UserSpace {
             unsafe { copy_page(src.start_address(), dst) };
         }
 
+        // 6. 共享文件映射的写回描述符（`MAP_SHARED` 的落盘语义跟着子进程：
+        //    子进程改的字节同样要写回同一个文件）。`MAP_PRIVATE` 页没有描述符。
+        child.mmap_files = self.mmap_files;
+
         Ok(child)
     }
 
@@ -545,7 +604,7 @@ impl UserSpace {
     ///
     /// 与 [`UserSpace::stack_write`] 同一套做法：此时内核还跑在自己的 CR3 下，
     /// 因此按页帧的**物理地址**写入（内核恒等映射物理内存），不需要先切页表。
-    /// `virt` 必须落在已映射的 mmap 页里（调用方先 `mmap_anon` 再调用）。
+    /// `virt` 必须落在已映射的 mmap 页里（调用方先 `mmap_anon`/`mmap_file` 再调用）。
     ///
     /// # Panics
     /// 目标页未映射时 panic：这是内核内部契约，调用顺序错了应当立刻显形。
@@ -629,7 +688,12 @@ impl UserSpace {
     /// `prot` 的合法性、`W^X` 检查做完）。新页**必须清零**：匿名映射不得把上一任
     /// 使用者的内容送给新调用方。`PROT_NONE`（`prot == 0`）是合法的：映射存在、
     /// 帧已分配，但对 ring3 不可访问（清 `USER`），可由 `mprotect` 再启用。
-    pub fn mmap_anon(&mut self, len: u64, prot: u64) -> Result<u64, i64> {
+    /// mmap 窗口里的公共分配器：first-fit 找连续 `pages` 页，逐页 `map_new_page`
+    /// （分配 + 清零 + 写 PT）。返回 `(起始页号, 页数, 虚拟地址)`。
+    ///
+    /// [`UserSpace::mmap_anon`] 与 [`UserSpace::mmap_file`] 共用它 —— 两者唯一的区别是
+    /// 后者要登记写回描述符，而「怎么在窗口里占位置」是同一件事。
+    fn mmap_alloc(&mut self, len: u64, prot: u64) -> Result<(usize, usize, u64), i64> {
         if len == 0 {
             return Err(EINVAL);
         }
@@ -663,14 +727,81 @@ impl UserSpace {
                 }
             }
         }
-        Ok(USER_MMAP_VIRT + start as u64 * PAGE_SIZE)
+        Ok((start, pages, USER_MMAP_VIRT + start as u64 * PAGE_SIZE))
     }
 
-    /// 取消一段匿名映射（`munmap`）。
+    /// 匿名映射（`mmap`）：在 mmap 窗口里 first-fit 找连续 `len` 字节。
     ///
-    /// 要求整段页对齐、落在 mmap 窗口内、且**每一页都已映射** ——
-    /// 不做「部分取消」这种半成品语义（要么整段归还，要么 `EINVAL`）。
-    pub fn munmap_anon(&mut self, addr: u64, len: u64) -> Result<(), i64> {
+    /// 只接受 `MAP_PRIVATE|MAP_ANONYMOUS`（调用方在 syscall 层校验 flags，并已把
+    /// `prot` 的合法性、`W^X` 检查做完）。新页**必须清零**：匿名映射不得把上一任
+    /// 使用者的内容送给新调用方。`PROT_NONE`（`prot == 0`）是合法的：映射存在、
+    /// 帧已分配，但对 ring3 不可访问（清 `USER`），可由 `mprotect` 再启用。
+    pub fn mmap_anon(&mut self, len: u64, prot: u64) -> Result<u64, i64> {
+        let (_, _, addr) = self.mmap_alloc(len, prot)?;
+        Ok(addr)
+    }
+
+    /// 文件映射（v1.0 第三步只读、第五步可写）：分配并清零页，返回虚拟地址。
+    ///
+    /// 内容的搬运（`[offset, offset+len)` 与文件大小的交集）由 syscall 层用
+    /// [`UserSpace::mmap_write`] 完成 —— 文件内容是内核侧的数据，不属于地址空间模块。
+    ///
+    /// `shared` 为真（`MAP_SHARED`）时登记一条写回描述符：
+    ///
+    /// - 描述符满（已有 [`MMAP_FILES_MAX`] 段共享文件映射）⇒ `-ENOMEM`，**并把刚建好的
+    ///   映射整段回滚**，不留半个状态；
+    /// - 路径长于 [`MMAP_FILE_PATH_MAX`] 时 panic（调用方在 syscall 层已校验并拒绝）。
+    ///
+    /// `file_len` 是 `mmap` 那一刻的文件大小：写回时用它**夹住**每页的写回长度，
+    /// 因此「映射比文件长」不会把文件撑大。
+    pub fn mmap_file(
+        &mut self,
+        len: u64,
+        prot: u64,
+        path: &str,
+        offset: u64,
+        file_len: u64,
+        shared: bool,
+    ) -> Result<u64, i64> {
+        assert!(
+            path.len() <= MMAP_FILE_PATH_MAX,
+            "mmap_file 路径超过描述符容量（syscall 层应先拒绝）"
+        );
+        let (start, pages, addr) = self.mmap_alloc(len, prot)?;
+        if !shared {
+            // `MAP_PRIVATE` 文件映射不落盘：与匿名页同构，不需要描述符
+            return Ok(addr);
+        }
+        let Some(slot) = self.mmap_files.iter().position(|desc| desc.is_none()) else {
+            for i in start..start + pages {
+                unmap_page(self.pt, &mut self.mmap[i], USER_MMAP_VIRT + i as u64 * PAGE_SIZE);
+                self.mmap_flags[i] = 0;
+            }
+            return Err(ENOMEM);
+        };
+        let mut desc = MmapFileDesc {
+            start: start as u8,
+            pages: pages as u8,
+            offset,
+            file_len,
+            path: [0; MMAP_FILE_PATH_MAX],
+            path_len: path.len() as u8,
+        };
+        desc.path[..path.len()].copy_from_slice(path.as_bytes());
+        self.mmap_files[slot] = Some(desc);
+        Ok(addr)
+    }
+
+    /// 窗口页 `page` 所属的共享文件映射描述符（`None` = 匿名页或 `MAP_PRIVATE` 文件页）。
+    fn mmap_file_desc(&self, page: usize) -> Option<&MmapFileDesc> {
+        self.mmap_files.iter().flatten().find(|desc| desc.covers(page))
+    }
+
+    /// 把 `(addr, len)` 解析成 mmap 窗口内的 `(起始页号, 页数)`，只做窗口级的校验。
+    ///
+    /// 见 [`UserSpace::mmap_writeback`] 与 [`UserSpace::munmap`]：两者共用同一套
+    /// 「页对齐 + 非空 + 落在 mmap 窗口内」的约定，错误一律 `EINVAL`。
+    fn mmap_range(&self, addr: u64, len: u64) -> Result<(usize, usize), i64> {
         if len == 0 || addr % PAGE_SIZE != 0 {
             return Err(EINVAL);
         }
@@ -685,11 +816,97 @@ impl UserSpace {
         if addr < USER_MMAP_VIRT || end > USER_MMAP_VIRT + USER_MMAP_MAX {
             return Err(EINVAL);
         }
-        let start = ((addr - USER_MMAP_VIRT) / PAGE_SIZE) as usize;
-        let pages = (bytes / PAGE_SIZE) as usize;
+        Ok((
+            ((addr - USER_MMAP_VIRT) / PAGE_SIZE) as usize,
+            (bytes / PAGE_SIZE) as usize,
+        ))
+    }
+
+    /// 把 `MAP_SHARED` 文件映射页的内容**写回文件**（`msync`，以及 `munmap` 的前一步）。
+    ///
+    /// 校验与 `munmap` 同一套：页对齐、非空、落在 mmap 窗口内、每一页都已映射
+    /// （缺一即 `EINVAL`）。只有**共享文件页**会被处理：
+    ///
+    /// - 匿名页、`MAP_PRIVATE` 文件页直接跳过 —— 它们本来就不该落盘；
+    /// - 每页写回 `min(PAGE_SIZE, file_len - 页文件偏移)` 字节，因此映射尾部超出文件
+    ///   的部分（映射内的填充零）不会被写回去，文件长度不变；
+    /// - 页文件偏移 ≥ `file_len` 时该页整页跳过。
+    ///
+    /// 返回 `(写回的页数, 写回的字节数)`。`vfs::write` 失败（例如只读文件系统）时返回
+    /// 它的 `-errno`：**不回滚**已写回的页，调用方如实上报（串口有记录）。
+    pub fn mmap_writeback(&self, addr: u64, len: u64) -> Result<(usize, usize), i64> {
+        let (start, pages) = self.mmap_range(addr, len)?;
+        for i in start..start + pages {
+            if !self.window_mapped(UserWindow::Mmap, i) {
+                return Err(EINVAL);
+            }
+        }
+        let mut wrote_pages = 0usize;
+        let mut wrote_bytes = 0usize;
+        for i in start..start + pages {
+            let Some(desc) = self.mmap_file_desc(i) else {
+                continue;
+            };
+            let page = i - desc.start as usize;
+            let file_off = desc.offset + page as u64 * PAGE_SIZE;
+            if file_off >= desc.file_len {
+                continue;
+            }
+            let n = core::cmp::min(PAGE_SIZE, desc.file_len - file_off) as usize;
+            let frame = self.mmap[i].expect("已校验：这一页已映射");
+            // 内核恒等映射物理内存 ⇒ 按页帧的物理地址读页内容（不需要切 CR3）
+            let bytes = unsafe { core::slice::from_raw_parts(frame.start_address() as *const u8, n) };
+            vfs::write(desc.path(), file_off, bytes)?;
+            wrote_pages += 1;
+            wrote_bytes += n;
+        }
+        Ok((wrote_pages, wrote_bytes))
+    }
+
+    /// `munmap` 的**前置校验**（不动任何页帧）：返回 `(起始页号, 页数)`。
+    ///
+    /// 三个条件缺一即 `EINVAL`：页对齐 + 非空 + 落在 mmap 窗口内；每一页都已映射；
+    /// 与每一段共享文件映射的重叠都是「整段覆盖」（部分覆盖会让描述符无法表达 ——
+    /// v1 不做 VMA 分裂）。
+    ///
+    /// 为什么单独抽出来：`sys_munmap` 要先校验、**再**写回、最后归还。否则一次注定
+    /// 失败的 `munmap`（比如部分归还共享映射）会先把半个映射写回文件 —— I/O 发生在一个
+    /// 被拒绝的操作里，是「做了但没成功」的坏味道。
+    pub fn munmap_check(&self, addr: u64, len: u64) -> Result<(usize, usize), i64> {
+        let (start, pages) = self.mmap_range(addr, len)?;
         for i in start..start + pages {
             if self.mmap[i].is_none() {
                 return Err(EINVAL);
+            }
+        }
+        let end = start + pages;
+        for desc in self.mmap_files.iter().flatten() {
+            let (dstart, dpages) = (desc.start as usize, desc.pages as usize);
+            let overlaps = start < dstart + dpages && dstart < end;
+            if overlaps && !(start <= dstart && end >= dstart + dpages) {
+                return Err(EINVAL);
+            }
+        }
+        Ok((start, pages))
+    }
+
+    /// 取消一段映射（`munmap`）：要求整段页对齐、落在 mmap 窗口内、且**每一页都已映射**
+    /// —— 不做「部分取消」这种半成品语义（要么整段归还，要么 `EINVAL`）。
+    ///
+    /// **共享文件映射必须整段归还**：写回描述符是按整段登记的，部分 `munmap` 就得做
+    /// VMA 分裂（v1 不做，串口上有 `errno=22` 记录）。落在归还区间内的描述符随之释放。
+    ///
+    /// **写回不在这里发生**：调用方（`syscall/memory.rs`）先 [`UserSpace::mmap_writeback`]
+    /// 再调用本函数，失败也照样 `munmap`（`munmap` 的成功与否不该被文件系统状态左右）。
+    pub fn munmap(&mut self, addr: u64, len: u64) -> Result<(), i64> {
+        let (start, pages) = self.munmap_check(addr, len)?;
+        let end = start + pages;
+        for slot in self.mmap_files.iter_mut() {
+            if let Some(desc) = slot {
+                let (dstart, dpages) = (desc.start as usize, desc.pages as usize);
+                if start <= dstart && dstart + dpages <= end {
+                    *slot = None;
+                }
             }
         }
         for i in start..start + pages {
@@ -702,7 +919,7 @@ impl UserSpace {
     /// 系统调用 `mprotect(addr, len, prot)`：改写**已映射**页的权限位，返回页数。
     ///
     /// 全部校验通过才动手（**没有部分成功**）：页对齐、非空、`addr` 落在支持的窗口里、
-    /// 范围不跨窗口、每一页都已映射。缺一即 `EINVAL`（与 [`UserSpace::munmap_anon`]
+    /// 范围不跨窗口、每一页都已映射。缺一即 `EINVAL`（与 [`UserSpace::munmap`]
     /// 的「整段已映射」同一约定；Linux 这里用 `ENOMEM`）。
     ///
     /// 页帧不动：`mprotect` 不搬家也不清零，`PROT_NONE` → `RW` 回来内容原样还在。

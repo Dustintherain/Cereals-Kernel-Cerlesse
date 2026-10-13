@@ -2,6 +2,7 @@
 
 - 版本：v0.6 建立 / **v0.7 补齐文件 syscall** / **v0.9 第一步补齐用户堆** / **v0.9 第二步补齐 `stdin`** /
   **v0.9 第三步补齐进程调用与 `argc`/`argv`** / **v1.0 第二步补齐 `envp` 与 `mmap` 的 `offset`** /
+  **v1.0 第五步补齐可写 / 共享文件映射与 `msync`** /
   **纯内核化：随用户态移入独立 workspace**（现位于 `userland/libc/`）
 - 状态：✅ 已实现（2026-10-11，随 `make test-user` **61 项** + `make test-shell` **11 项** + `make test-proc` **8 项 + 4 正则**断言实测通过；
   `user/hello` 作为 RAMFS 上的 `/init`、`user/shell` 作为 `/bin/sh`、`user/hello-bin` 作为 `/bin/hello`
@@ -18,7 +19,7 @@
 
 | 组成 | 内容 |
 | ---- | ---- |
-| `syscall` | 系统调用号常量 + 裸入口 `raw(nr, a1..a5)`（等价 `raw6(nr, a1..a6)`，第 6 参数 `r9`）+ `write` / `read` / `open` / `close` / `getpid` / `nanosleep` / `exit` / `brk` / `mmap`（含 `mmap_with_offset`）/ `munmap` / `fork` / `execve`（含 `execve_env`）/ `wait4` / `socket` / `bind` / `sendto` / `recvfrom` / `net_config`（v1.0 第四步） |
+| `syscall` | 系统调用号常量 + 裸入口 `raw(nr, a1..a5)`（等价 `raw6(nr, a1..a6)`，第 6 参数 `r9`）+ `write` / `read` / `open` / `close` / `getpid` / `nanosleep` / `exit` / `brk` / `mmap`（含 `mmap_with_offset` 与文件映射 `mmap_file`）/ `munmap` / `msync`（v1.0 第五步）/ `fork` / `execve`（含 `execve_env`）/ `wait4` / `socket` / `bind` / `sendto` / `recvfrom` / `net_config`（v1.0 第四步） |
 | `args` | `argc()` / `arg(i)` / `arg_str(i)` / `Args`：入口寄存器里的 `rdi`/`rsi` 由 `_start` 存进来（v0.9 第三步） |
 | `env` | `env_count()` / `env_var(i)` / `getenv(name)` / `env::Env`：入口寄存器里的 `rdx`/`r10`（`_start` 把 `r10` 搬进 `rcx`）由 `cer_start` 存进来；`execve` 默认继承（v1.0 第二步） |
 | `heap` | `#[global_allocator]`（bump over `mmap`，64 KiB 块）—— 用户程序因此可以用 `Vec`/`String`/`Box`（v0.9 第一步） |
@@ -111,7 +112,7 @@ pub extern "C" fn main() -> i32 {
    按名字命名的 `.lbss.<symbol>` 段，`user.ld` 必须显式把它们收进 `.bss`，否则它们会变成
    **孤儿段**被 lld 塞在 `.data` 之后，RW 段不再页对齐（实测落在 `0x8000003040`）；
 4. **内存窗口是固定布局**：映像（`.text`/`.rodata`/`.data`/`.bss`）上限 64 KiB、栈 16 KiB，
-   v0.9 第一步又加了 **brk 堆窗口 256 KiB** 与 **匿名 mmap 窗口 256 KiB**（见第 5 节）；
+   v0.9 第一步又加了 **brk 堆窗口 256 KiB** 与 **mmap 窗口 256 KiB**（匿名 + 文件映射，见第 5 节）；
    超出窗口的 `brk`/`mmap` 会失败（`brk` 返回原值、`mmap` 返回 `-ENOMEM`）；
    窗口内的保护属性可以用 `mprotect` 在运行期改写（v1.0 第一步，见第 5.1 节），
    但**用户栈的保护属性固定**（`RW` + `NX`）且不能改。
@@ -120,7 +121,7 @@ pub extern "C" fn main() -> i32 {
 不用启动 QEMU 就能在改坏链接脚本时立刻发现。
 
 尚未实现的调用：**号已定义的调用已全部落地**（`mprotect` 是最后一个，见 5.1）；
-**可写**文件映射（`MAP_SHARED`/写回）、用户态抢占与**完整**动态链接属后续版本。
+**匿名**共享映射（`MAP_SHARED|MAP_ANONYMOUS`）、用户态抢占与**完整**动态链接属后续版本。
 
 ## 5. 用户堆（v0.9 第一步）
 
@@ -147,7 +148,8 @@ v.push(1);
 | ---- | ---- | ---- |
 | `brk(addr)` | `addr = 0` 查询堆顶；否则页对齐增长/收缩（256 KiB 窗口） | **不返回错误**：返回原值（用 `ret < addr` 判断） |
 | `mmap(len, prot, flags)` / `mmap_with_offset(len, prot, flags, offset)` | 匿名映射：`MAP_PRIVATE\|MAP_ANONYMOUS`、`fd` 固定 -1、`offset=0`；first-fit；新页全零 | `-EINVAL`（位非法/`PROT_WRITE\|PROT_EXEC`/非 0 `offset`）、`-ENOMEM`（超窗口） |
-| `mmap_file(fd, len, prot, flags, offset)` | **文件映射**（v1.0 第三步）：`fd ≥ 3` 可读、`MAP_PRIVATE`、只读、`offset` 页对齐；把文件 `[offset, offset+len)` 映射进来 | `-EINVAL`（非页对齐 `offset`/写权限/`MAP_SHARED`/无效 fd） |
+| `mmap_file(fd, len, prot, flags, offset)` | **文件映射**（v1.0 第三步只读 / 第五步可写）：`fd ≥ 3` 可读、`flags` = `MAP_PRIVATE`（改动不落盘）或 `MAP_SHARED`（`msync`/`munmap` 写回）、`prot` 不含 `PROT_EXEC`、`offset` 页对齐；把文件 `[offset, offset+len)` 与文件的交集映射进来 | `-EINVAL`（非页对齐 `offset`/`PROT_EXEC`/`MAP_SHARED\|MAP_ANONYMOUS`）、`-EBADF`（`MAP_SHARED\|PROT_WRITE` 但 fd 只读）、`-ENOMEM`（描述符用尽） |
+| `msync(addr, len, flags)` | 把 `MAP_SHARED` 文件页写回文件（v1.0 第五步）：页对齐、全段已映射；非共享页跳过；`MS_SYNC`/`MS_ASYNC`（等价）、`MS_INVALIDATE` 忽略；写回长度夹在映射那一刻的文件大小内 | `-EINVAL`（位/对齐/长度/有页未映射），`vfs::write` 的 `-errno`（只读文件系统等） |
 | `mprotect(addr, len, prot)` | 改**已映射**页的保护属性（v1.0）：页对齐、同一窗口、全段已映射；`PROT_NONE` 关页但留住页帧 | `-EINVAL`（对齐/长度/位/跨窗口/有页未映射/目标为栈） |
 | `munmap(addr, len)` | 整段归还（要求页对齐且全段已映射） | `-EINVAL` |
 

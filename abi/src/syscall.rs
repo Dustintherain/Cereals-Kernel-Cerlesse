@@ -37,6 +37,11 @@ pub const SYS_MPROTECT: u64 = 10;
 pub const SYS_MUNMAP: u64 = 11;
 /// `brk(addr)`（沿用 Linux 语义：失败返回原值，不返回错误）。
 pub const SYS_BRK: u64 = 12;
+/// `msync(addr, len, flags)`（v1.0 第五步：把共享文件映射的页写回文件）。
+///
+/// 号沿用 Linux x86_64 的 `msync`。只对 `MAP_SHARED` 的文件映射页有效；
+/// 其余页（匿名 / `MAP_PRIVATE`）跳过 —— 它们本来就不该落盘。
+pub const SYS_MSYNC: u64 = 26;
 /// `nanosleep(ticks)`（Linux 名 `nanosleep`，单位是内核 tick 而不是 `timespec`）。
 pub const SYS_SLEEP: u64 = 35;
 /// `getpid()`。
@@ -120,7 +125,7 @@ pub const fn is_cerlesse_segment(nr: u64) -> bool {
 /// 所有**有名字**的调用号（按号升序；[`crate::record`] 与自测用它断言唯一性）。
 ///
 /// 这张表是「已发布的号」清单：加号时同时加到这里，测试会拦住重复与越界。
-pub const NAMED: [u64; 31] = [
+pub const NAMED: [u64; 32] = [
     SYS_READ,
     SYS_WRITE,
     SYS_OPEN,
@@ -129,6 +134,7 @@ pub const NAMED: [u64; 31] = [
     SYS_MPROTECT,
     SYS_MUNMAP,
     SYS_BRK,
+    SYS_MSYNC,
     SYS_SLEEP,
     SYS_GETPID,
     SYS_SOCKET,

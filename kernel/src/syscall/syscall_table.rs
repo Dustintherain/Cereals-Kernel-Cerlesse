@@ -13,7 +13,7 @@
 //!
 //! 号段（`abi::syscall` 是权威定义）：`0..=255` 沿用 Linux x86_64 语义
 //! （`read=0 … wait4=61`、`getdents=78`），`>= 256` 是 Cerlesse 扩展段 ——
-//! `getprocs=256`、CKM `257..=260`、存储 `261..=266`，`SYS_MAX=267`（不含）。
+//! `getprocs=256`、CKM `257..=260`、存储 `261..=266`、网络 `267`，`SYS_MAX=268`（不含）。
 
 // 编号表本身就是对外契约：尚未实现的号也必须有名字，否则调用方只能靠魔法数。
 #![allow(dead_code)]
@@ -33,7 +33,8 @@ pub use abi::syscall::{
     is_cerlesse_segment, is_linux_segment, unimplemented_name, CERLESSE_SEGMENT_START,
     LINUX_SEGMENT_END, SYS_BIND, SYS_BRK, SYS_CKM_AUDIT_READ, SYS_CKM_COMPONENT_STATE,
     SYS_CKM_POLICY_QUERY, SYS_CKM_POLICY_SET, SYS_CLOSE, SYS_EXEC, SYS_EXIT, SYS_FORK,
-    SYS_GETDENTS, SYS_GETPID, SYS_GETPROCS, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NET_CONFIG,
+    SYS_GETDENTS, SYS_GETPID, SYS_GETPROCS, SYS_MMAP, SYS_MPROTECT, SYS_MSYNC, SYS_MUNMAP,
+    SYS_NET_CONFIG,
     SYS_OPEN, SYS_READ, SYS_RECVFROM, SYS_SENDTO, SYS_SLEEP, SYS_SOCKET, SYS_STORAGE_ASSIGN_LETTER,
     SYS_STORAGE_FORMAT, SYS_STORAGE_MOUNT, SYS_STORAGE_RESCAN, SYS_STORAGE_UNMOUNT,
     SYS_STORAGE_VOLUMES, SYS_WAIT, SYS_WRITE, SYS_MAX,
@@ -67,6 +68,8 @@ pub const SYS_TABLE: [SyscallHandler; SYS_MAX as usize] = {
     // v1.0 第一步：mprotect 不再是 ENOSYS 桩（W^X 的「先写后换只执行」）
     table[SYS_MPROTECT as usize] = crate::syscall::memory::sys_mprotect;
     table[SYS_MUNMAP as usize] = crate::syscall::memory::sys_munmap;
+    // v1.0 第五步：msync —— 把 MAP_SHARED 文件映射的页写回文件
+    table[SYS_MSYNC as usize] = crate::syscall::memory::sys_msync;
     table[SYS_BRK as usize] = crate::syscall::memory::sys_brk;
     table[SYS_GETPID as usize] = crate::syscall::process::sys_getpid;
     table[SYS_SLEEP as usize] = crate::syscall::process::sys_sleep;

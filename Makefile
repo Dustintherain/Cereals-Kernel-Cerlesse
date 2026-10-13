@@ -317,11 +317,31 @@ test-user: image
 		--expect "hello: filemmap munmap ret=0" \
 		--expect "user: mmap rejected (file-backed mmap offset must be page-aligned)" \
 		--expect "hello: filemmap misaligned ret=-22" \
-		--expect "user: mmap rejected (file-backed mmap is read-only (no PROT_WRITE/PROT_EXEC))" \
-		--expect "hello: filemmap write ret=-22" \
-		--expect "user: mmap rejected (file-backed mmap supports MAP_PRIVATE only (no MAP_SHARED))" \
-		--expect "hello: filemmap shared ret=-22" \
+		--expect "user: mmap rejected (file-backed mmap is not executable (no PROT_EXEC))" \
+		--expect "hello: filemmap exec ret=-22" \
+		--expect "user: mmap rejected (MAP_SHARED|PROT_WRITE needs an fd open for writing) path=/tmp/mmap.bin" \
+		--expect "hello: filemmap shared ro ret=-9" \
+		--expect "hello: filemmap private mmap ret=" \
+		--expect "hello: filemmap private munmap ret=0" \
+		--expect "hello: filemmap private kept=1" \
 		--expect "hello: filemmap PASS=1" \
+		--expect "hello: sharedmmap wrote=2048" \
+		--expect "user: mmap len=4096 prot=0x3 flags=0x1 offset=0x0 file=/tmp/shared.bin -> " \
+		--expect "hello: sharedmmap contents=1 tail0=1" \
+		--expect "user: msync addr=" \
+		--expect " len=4096 flags=0x4 -> pages=1 bytes=2048" \
+		--expect "hello: sharedmmap msync ret=0" \
+		--expect "hello: sharedmmap persisted=1 filelen=2048" \
+		--expect "user: munmap writeback pages=1 bytes=2048" \
+		--expect "hello: sharedmmap munmap2 ret=0" \
+		--expect "hello: sharedmmap munmap persisted=1" \
+		--expect "hello: sharedmmap partial munmap ret=-22" \
+		--expect "hello: sharedmmap partial cleanup ret=0" \
+		--expect "flags=0x4 -> pages=0 bytes=0" \
+		--expect "hello: sharedmmap anon msync ret=0" \
+		--expect "user: msync errno=22 addr=0x800000000000 len=4096 flags=0x4" \
+		--expect "hello: sharedmmap msync bad addr ret=-22" \
+		--expect "hello: sharedmmap PASS=1" \
 		--expect "user: mmap errno=12 len=266240" \
 		--expect "hello: mmap too big ret=-12" \
 		--expect "hello: mmap wx ret=-22" \

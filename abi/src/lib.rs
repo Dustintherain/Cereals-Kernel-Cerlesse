@@ -232,7 +232,10 @@ mod tests {
         assert_eq!(f::O_ALLOWED, f::O_ACCMODE | f::O_CREAT);
         assert_eq!(f::PROT_MASK, f::PROT_READ | f::PROT_WRITE | f::PROT_EXEC);
         assert_eq!(f::PROT_NONE, 0);
-        assert_eq!(f::MAP_SUPPORTED, f::MAP_PRIVATE | f::MAP_ANONYMOUS);
+        assert_eq!(f::MAP_SUPPORTED, f::MAP_TYPE | f::MAP_ANONYMOUS);
+        assert_eq!(f::MAP_TYPE, f::MAP_PRIVATE | f::MAP_SHARED);
+        assert_eq!(f::MAP_ANON_SUPPORTED, f::MAP_PRIVATE | f::MAP_ANONYMOUS);
+        assert_eq!(f::MS_SUPPORTED, f::MS_ASYNC | f::MS_INVALIDATE | f::MS_SYNC);
         assert_eq!(f::FD_FIRST_DYNAMIC, 3);
         assert_eq!(f::STDIN, 0);
         assert_eq!(f::STDOUT, 1);

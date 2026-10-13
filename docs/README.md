@@ -28,7 +28,7 @@
 | [memory.md](./memory.md) | 阶段：物理/虚拟内存 / Heap / Allocator | ✅ v0.3 已完成 |
 | [drivers.md](./drivers.md) | 阶段：驱动框架 / PCI / 磁盘（含 v0.4 中断/时钟/键盘/上下文切换） | ✅ v0.8 已完成（驱动注册框架 + PCI 枚举 + 块设备抽象 + **legacy virtio-blk**，`make test-driver` 22 项 PASS；启动盘已改为 virtio-blk）；v0.4（PIC + PIT 100Hz + PS/2 键盘 + 上下文切换原语）已完成；v0.9 键盘加**行缓冲 + 终端式回显**（`make test-keyboard` 断言同步）；**v0.9 第四步：简化网络栈（virtio-net + Ethernet → ARP → IPv4 → UDP）已落地**；**ICMP Echo（ping）已落地**；**v1.0 第四步：UDP 套接字最小集（`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）已落地**（`make test-network` 30 项，见 drivers.md 1.9） |
 | [process.md](./process.md) | 阶段：进程/线程 / 上下文切换 / 调度器 / IPC | ✅ v0.5 已完成（线程模型 + 上下文切换 + Round Robin 时间片调度 `make test-scheduler`；IPC pipe 骨架 `make test-ipc`）；channel / shared_memory 仍为占位；v0.6 追加了 `scheduler::suspend()`；**v0.9 第三步：进程对象与 `fork`/`execve`/`wait4` 已落地**（每进程地址空间 + 每进程 64 KiB 内核栈 + 完整用户帧，`make test-proc`，见 1.4） |
-| [syscall.md](./syscall.md) | 阶段：系统调用 / 用户空间 / ELF | 🟡 v0.7 核心已完成（`syscall`/`sysret` 入口 + ring3 隔离 + `read/write/open/close`+ `write/exit/getpid/sleep` + **ELF Loader** 从 RAMFS `/init` 按段权限装载），v0.9 已落地六步：**用户堆**（3.5）、**`stdin` + 交互式 Shell**（3.6）、**`fork`/`execve`/`wait4` + `argc`/`argv`**（3.7，外部程序 `/bin/hello` 真的能跑）、**基础用户程序 + `getdents`/`getprocs`**（3.8，`/bin/{ls,cat,echo,ps}`）、**内核侧最小动态链接**（3.9，`ET_DYN` + `PT_INTERP` + `DT_NEEDED` + `RELATIVE`/`JUMP_SLOT`，`/bin/dynhello` + `/lib/*`）；**v1.0 第一步：`mprotect`**（3.10，已映射页的保护属性运行期改写 + `PROT_NONE`，W^X 的「先写后换只执行」）；`make test-user` **111 项** / `make test-shell` 11 项 / `make test-proc` 26 项 + 4 正则 / `make test-programs` 17 项 + 5 正则 / `make test-dyn` 10 项 PASS；**v1.0 第二·三步**已补 **环境变量 `envp`**、**`mmap` 的 `offset` 槽位**与 **只读文件映射**（3.13）；仍未做：**可写**文件映射（`MAP_SHARED`）/**完整**动态链接（见 3.4/3.9/3.10） |
+| [syscall.md](./syscall.md) | 阶段：系统调用 / 用户空间 / ELF | 🟡 v0.7 核心已完成（`syscall`/`sysret` 入口 + ring3 隔离 + `read/write/open/close`+ `write/exit/getpid/sleep` + **ELF Loader** 从 RAMFS `/init` 按段权限装载），v0.9 已落地六步：**用户堆**（3.5）、**`stdin` + 交互式 Shell**（3.6）、**`fork`/`execve`/`wait4` + `argc`/`argv`**（3.7，外部程序 `/bin/hello` 真的能跑）、**基础用户程序 + `getdents`/`getprocs`**（3.8，`/bin/{ls,cat,echo,ps}`）、**内核侧最小动态链接**（3.9，`ET_DYN` + `PT_INTERP` + `DT_NEEDED` + `RELATIVE`/`JUMP_SLOT`，`/bin/dynhello` + `/lib/*`）；**v1.0 第一步：`mprotect`**（3.10，已映射页的保护属性运行期改写 + `PROT_NONE`，W^X 的「先写后换只执行」）；`make test-user` **111 项** / `make test-shell` 11 项 / `make test-proc` 26 项 + 4 正则 / `make test-programs` 17 项 + 5 正则 / `make test-dyn` 10 项 PASS；**v1.0 第二·三·五步**已补 **环境变量 `envp`**、**`mmap` 的 `offset` 槽位**、**文件映射**（3.13：只读私有）与 **可写 / 共享（`MAP_SHARED`）文件映射 + `msync`**（3.15：`MAP_PRIVATE` 改写不落盘、`MAP_SHARED` 写回文件）；`make test-user` **136 项** / `make test-shell` 11 项 / `make test-proc` 26 项 + 4 正则 / `make test-programs` 32 项 + 7 正则 / `make test-dyn` 10 项 PASS；仍未做：**匿名**共享映射 / **完整**动态链接（见 3.4/3.9/3.10） |
 | [filesystem.md](./filesystem.md) | 阶段：VFS / RAMFS / 磁盘文件系统 | ✅ v0.7 + **v0.8 磁盘后端**已完成（VFS trait + 挂载表最长前缀路由 + RAMFS + fd 表；**FAT12/16/32 只读后端** + `tools/mkfs/mkfs.py`，`make test-fs` 21 项 / `make test-fat` 21 项 PASS） |
 | [desktop.md](./desktop.md) | **桌面环境兼容路线（v1.0 之后，规划）**：现状审计、用户态/内核侧归属、D0–D5 分层里程碑与 QEMU 验收 | 📋 规划（2026-10-11 新增） |
 | [pure-kernel.md](./pure-kernel.md) | **纯内核化改造规划与执行记录**：现状审计（C1–C9，含实测证据）、逐文件迁移清单、内核/用户态双仓库划分、六阶段（Cargo 配置 / 构建目标 / 验收）、七条验收标准对照、非目标 | 🟡 执行中（阶段二/三/四 ✅，2026-10-12 更新） |
@@ -63,8 +63,11 @@
   `mmap` 新增 `offset` 槽位（匿名映射要求 0），见 syscall.md 3.13；
 - **v1.0 第三步**✅（2026-10-12）：**文件映射** —— `mmap(fd ≥ 3, …, offset)` 把文件
   `[offset, offset+len)` 只读私有地映射进内存（`offset` 真正生效），`libc::mmap_file`，见 syscall.md 3.13；
-  `make test-user` **111 项**、`make test-proc` 26 项 + 4 正则；**可写**文件映射（`MAP_SHARED`）、
-  **完整**动态链接（用户态 `ld.so`）、用户/组/权限等仍归后续（见 architecture.md 第 5 节）。
+- **v1.0 第五步**✅（2026-10-13）：**可写 / 共享文件映射与 `msync`** —— `MAP_PRIVATE` 的改写只在
+  本进程，`MAP_SHARED` 的页在 `msync`/`munmap` 时写回文件（写回长度夹在映射那一刻的文件大小内），
+  见 syscall.md 3.15；`make test-user` **136 项**、`make test-proc` 26 项 + 4 正则；
+  **匿名**共享映射（`MAP_SHARED|MAP_ANONYMOUS`）、**完整**动态链接（用户态 `ld.so`）、
+  用户/组/权限等仍归后续（见 architecture.md 第 5 节）。
 - **第九阶段（v1.0 之后）**📋：**桌面环境兼容**（内核侧地基与接口对齐，D0 地基 → D1 输入 →
   D2 显示 → D3 音频 → D4 会话/电源 → D5 收尾）—— 规划见 [desktop.md](./desktop.md)，未开工。
 - **第十阶段（v0.9 之后；执行上排在第九阶段之前）**🟡：**纯内核化边界收敛** —— 内核只提供底层机制，

@@ -9,7 +9,8 @@
   第六步（**内核侧最小动态链接**：`PT_INTERP` + `DT_NEEDED` + `RELATIVE`/`JUMP_SLOT`）；
   v0.9 范围内的目标已全部完成；剩余项（`mprotect`、完整动态链接（用户态 `ld.so`）、
   TCP 与面向流的 socket、更多用户程序）归 v1.0，其中 **`mprotect`（第一步）、环境变量 `envp` + `mmap offset`（第二步）、只读文件映射（第三步）、
-  ICMP Echo/ping、UDP 套接字最小集（`socket`/`bind`/`sendto`/`recvfrom`，第四步）已落地**：
+  ICMP Echo/ping、UDP 套接字最小集（`socket`/`bind`/`sendto`/`recvfrom`，第四步）、
+  **可写 / 共享（`MAP_SHARED`）文件映射与 `msync`**（第五步）已落地**：
   已映射页的保护属性可在运行期改写（`PROT_NONE` 与 W^X 的「先写后换只执行」，见 syscall.md 3.10）；
   **v1.0 之后新增「桌面环境兼容路线」（规划）**：
   D0 地基 → D1 输入 → D2 显示 → D3 音频 → D4 会话/电源 → D5 收尾，见 [desktop.md](desktop.md)；

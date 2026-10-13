@@ -14,7 +14,7 @@
 //! | R3 | 最大记录放得进一页 | 「记录尺寸页内对齐」是 ABI 承诺（阶段六） |
 //! | R4 | `LINUX_SEGMENT_END <= CERLESSE_SEGMENT_START` | 号段不重叠 |
 //! | R5 | `SYS_MAX` 大于最大已命名号 | 否则最后一个号会被判「越界」 |
-//! | R6 | 掩码自洽（`PROT_MASK` / `MAP_SUPPORTED` / `O_ALLOWED`） | 内核用掩码拒绝未知位 |
+//! | R6 | 掩码自洽（`PROT_MASK` / `MAP_SUPPORTED` / `MS_SUPPORTED` / `O_ALLOWED`） | 内核用掩码拒绝未知位 |
 //! | R7 | 盘符/容量哨兵不与合法值冲突 | `LETTER_NONE` 必须不是 A–Z |
 
 use crate::{ckm, dirent, flags, procinfo, socket, syscall, volume};
@@ -74,11 +74,14 @@ const _: () = assert!(syscall::CERLESSE_SEGMENT_START == 256);
 const _: () = assert!(syscall::SYS_MAX > syscall::SYS_STORAGE_FORMAT);
 const _: () = assert!(syscall::SYS_MAX > syscall::SYS_CKM_POLICY_SET);
 const _: () = assert!(syscall::SYS_MAX == 268);
-const _: () = assert!(syscall::NAMED.len() == 31);
+const _: () = assert!(syscall::NAMED.len() == 32);
 
 // R6：掩码自洽（内核按掩码拒未知位，掩码少一位就会静默接受）。
 const _: () = assert!(flags::PROT_MASK == flags::PROT_READ | flags::PROT_WRITE | flags::PROT_EXEC);
-const _: () = assert!(flags::MAP_SUPPORTED == flags::MAP_PRIVATE | flags::MAP_ANONYMOUS);
+const _: () = assert!(flags::MAP_SUPPORTED == flags::MAP_TYPE | flags::MAP_ANONYMOUS);
+const _: () = assert!(flags::MAP_TYPE == flags::MAP_PRIVATE | flags::MAP_SHARED);
+const _: () = assert!(flags::MAP_ANON_SUPPORTED == flags::MAP_PRIVATE | flags::MAP_ANONYMOUS);
+const _: () = assert!(flags::MS_SUPPORTED == flags::MS_ASYNC | flags::MS_INVALIDATE | flags::MS_SYNC);
 const _: () = assert!(flags::O_ALLOWED == flags::O_ACCMODE | flags::O_CREAT);
 const _: () = assert!(flags::O_ACCMODE == 0o3);
 const _: () = assert!(flags::FD_FIRST_DYNAMIC == 3);

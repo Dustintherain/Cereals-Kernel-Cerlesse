@@ -23,7 +23,7 @@
 //! - `mmap(len, prot, flags)` 只支持**私有匿名**映射（`MAP_PRIVATE|MAP_ANONYMOUS`）。
 //!   v1.0 起 syscall ABI 扩到第 6 个参数（`r9`），`mmap` 因此有了 `offset` 槽
 //!   （[`mmap_with_offset`]）；匿名映射仍要求 `offset = 0`，非 0 会被内核 `EINVAL`
-//!   拒绝 —— 文件映射（offset 才真正有意义）仍未实现，见内核模块文档；
+//!   拒绝，文件映射（`offset` 才真正有意义）用 [`mmap_file`]；
 //! - `PROT_WRITE|PROT_EXEC` 被内核拒绝（W^X）；`MAP_FIXED` 同样拒绝（固定地址放置未实现），
 //!   `PROT_NONE` 现在合法（v1.0 起可以再 `mprotect` 启用）；
 //! - `brk` 沿用 Linux 语义：**不返回错误**，失败时返回原值（用 `ret < addr` 判断）。
@@ -57,6 +57,7 @@ pub const SYS_MMAP: u64 = abi::syscall::SYS_MMAP;
 pub const SYS_MPROTECT: u64 = abi::syscall::SYS_MPROTECT;
 pub const SYS_MUNMAP: u64 = abi::syscall::SYS_MUNMAP;
 pub const SYS_BRK: u64 = abi::syscall::SYS_BRK;
+pub const SYS_MSYNC: u64 = abi::syscall::SYS_MSYNC;
 pub const SYS_SLEEP: u64 = abi::syscall::SYS_SLEEP; // nanosleep
 pub const SYS_GETPID: u64 = abi::syscall::SYS_GETPID;
 pub const SYS_FORK: u64 = abi::syscall::SYS_FORK;
@@ -140,10 +141,23 @@ pub const PROT_WRITE: i32 = abi::flags::PROT_WRITE as i32;
 /// `mmap` 保护位：可执行（**不能**与 [`PROT_WRITE`] 同时使用：内核强制 W^X）。
 pub const PROT_EXEC: i32 = abi::flags::PROT_EXEC as i32;
 
-/// `mmap` 标志：私有映射（与 [`MAP_ANONYMOUS`] 一起是最小可用组合）。
+/// `mmap` 标志：私有映射（写时复制语义：改写不落盘；与 [`MAP_ANONYMOUS`] 一起是最小可用组合）。
 pub const MAP_PRIVATE: i32 = abi::flags::MAP_PRIVATE as i32;
-/// `mmap` 标志：匿名映射（本内核**只**支持它，且要求 `fd = -1`）。
+/// `mmap` 标志：共享映射（v1.0 第五步：`msync`/`munmap` 时把改动**写回文件**）。
+pub const MAP_SHARED: i32 = abi::flags::MAP_SHARED as i32;
+/// `mmap` 标志：匿名映射（只与 [`MAP_PRIVATE`] 组合，要求 `fd = -1`）。
+/// `MAP_SHARED|MAP_ANONYMOUS`（进程间共享匿名页）仍未实现。
 pub const MAP_ANONYMOUS: i32 = abi::flags::MAP_ANONYMOUS as i32;
+
+/// `msync` 标志：[`MS_SYNC`] 的「不等回写完成」版本。
+///
+/// 本内核**同步**写回（没有回写线程），因此它与 [`MS_SYNC`] 是同一件事 ——
+/// 这个常量存在是为了让用户程序的代码在将来异步回写落地时不用改。
+pub const MS_ASYNC: i32 = abi::flags::MS_ASYNC as i32;
+/// `msync` 标志：让同一文件的其它映射副本失效（本内核没有页缓存，接受并忽略）。
+pub const MS_INVALIDATE: i32 = abi::flags::MS_INVALIDATE as i32;
+/// `msync` 标志：写回并等待完成。**至少要给 [`MS_SYNC`] 或 [`MS_ASYNC`] 之一。**
+pub const MS_SYNC: i32 = abi::flags::MS_SYNC as i32;
 
 /// 原始系统调用（5 参数便捷形式）：等价于 [`raw6`]，第 6 个参数固定为 0。
 ///
@@ -260,11 +274,18 @@ pub fn mmap(len: usize, prot: i32, flags: i32) -> isize {
     mmap_with_offset(len, prot, flags, 0)
 }
 
-/// `mmap` 的**文件映射**形式（v1.0 第三步）：把 `fd` 指向文件的 `[offset, offset+len)`
-/// 只读地映射进当前进程（`MAP_PRIVATE`，`offset` 必须页对齐）。
+/// `mmap` 的**文件映射**形式（v1.0 第三步只读、第五步可写）：把 `fd` 指向文件的
+/// `[offset, offset+len)` 映射进当前进程（`offset` 必须页对齐）。
 ///
-/// 内核只支持**只读私有**文件映射：`fd ≥ 3` 且可读、`flags = MAP_PRIVATE`、
-/// `prot` 不含 `PROT_WRITE`/`PROT_EXEC`。写回文件（`MAP_SHARED`）仍未实现。
+/// 内核要求：`fd ≥ 3` 且可读、`flags` 恰为 [`MAP_PRIVATE`] 或 [`MAP_SHARED`]、
+/// `prot` 不含 [`PROT_EXEC`]（文件映射不可执行）。两种模式的区别：
+///
+/// - [`MAP_PRIVATE`]：改写只留在本进程（与匿名映射同构），`munmap` 后消失；
+/// - [`MAP_SHARED`]：改动**写回文件**（[`msync`] 显式触发，或 `munmap` 自动触发）。
+///   因此 `prot` 含 [`PROT_WRITE`] 时要求 `fd` **打开可写**（否则返回 [`EBADF`]）。
+///   写回长度夹在映射那一刻的文件大小内 —— 映射比文件长不会把文件撑大。
+///
+/// 映射的 `len` 可以大于文件：文件尾之后的部分读作零。
 pub fn mmap_file(fd: i32, len: usize, prot: i32, flags: i32, offset: u64) -> isize {
     unsafe {
         raw6(
@@ -311,9 +332,28 @@ pub fn mprotect(addr: u64, len: usize, prot: i32) -> isize {
     unsafe { raw(SYS_MPROTECT, addr, len as u64, prot as u64, 0, 0) }
 }
 
-/// `munmap(addr, len)`：整段归还匿名映射（要求页对齐且全段已映射）。
+/// `munmap(addr, len)`：整段归还映射（要求页对齐且全段已映射）。
+///
+/// v1.0 第五步起：`MAP_SHARED` 文件映射的页在归还**之前**由内核写回文件，
+/// 因此 `munmap` 就是「改完就走」的落盘方式（想显式控制时机就用 [`msync`]）。
+/// 写回失败不会让 `munmap` 失败（映射照样归还，内核在串口上记录原因）。
 pub fn munmap(addr: u64, len: usize) -> isize {
     unsafe { raw(SYS_MUNMAP, addr, len as u64, 0, 0, 0) }
+}
+
+/// `msync(addr, len, flags)`：把 `MAP_SHARED` 文件映射的页**写回文件**（v1.0 第五步）。
+///
+/// - 只有共享文件页会被写回：`MAP_PRIVATE` 文件页与匿名页跳过（返回 `0`，内核串口上
+///   是 `pages=0 bytes=0`）—— 对一段纯匿名内存调它不会出错，只是什么都不做；
+/// - `flags` 至少要有 [`MS_SYNC`] 或 [`MS_ASYNC`]（本内核两者等价：同步写回）；
+///   [`MS_INVALIDATE`] 被接受并忽略；未知位返回 [`EINVAL`]；
+/// - 范围必须页对齐、非空、落在 mmap 窗口内且**每一页都已映射**，否则 [`EINVAL`]；
+/// - 写回失败（文件系统只读等）返回 `vfs::write` 的 `-errno`（例如 [`EIO`]）。
+///
+/// 返回值：`0` 成功，负数失败。内核为每次调用在串口留一行
+/// `user: msync addr=… -> pages=N bytes=M`，验收脚本据此断言「真的写回了几个字节」。
+pub fn msync(addr: u64, len: usize, flags: i32) -> isize {
+    unsafe { raw(SYS_MSYNC, addr, len as u64, flags as u64, 0, 0) }
 }
 
 /// `getpid()`：当前用户程序的 PID（内核分配的顺序号）。

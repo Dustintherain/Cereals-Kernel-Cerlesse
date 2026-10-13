@@ -95,7 +95,7 @@ Cerlesse/
 | `kernel/src/time/` | PIT/APIC Timer、系统时钟、sleep/yield | v0.4 |
 | `kernel/src/process/` | 进程/线程模型、PID、状态机 | v0.5 |
 | `kernel/src/scheduler/` | 调度队列、Round Robin | v0.5 |
-| `kernel/src/syscall/` | 系统调用入口/分发（v1.0 起 6 个参数，第 6 个 `r9`）、用户地址空间、ELF Loader、首批与文件 syscall、**用户堆+文件映射（`memory.rs`：`brk`/`mmap`（匿名 + 只读文件映射，含 `offset`）/`munmap`）**、**进程调用（`process.rs`：`fork`/`execve`（argv+envp 用户栈）/`wait4` + `getprocs`）**、**目录枚举（`dir.rs`：`getdents`）**、**最小动态链接（`dynamic.rs`：`ET_DYN`/`PT_INTERP`/`DT_NEEDED`/重定位）**、**UDP 套接字（`socket.rs`：`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）** | v0.6–v0.7 ✅ / v0.9 第一·三·五·六步 ✅ / v1.0 第四步 ✅ |
+| `kernel/src/syscall/` | 系统调用入口/分发（v1.0 起 6 个参数，第 6 个 `r9`）、用户地址空间、ELF Loader、首批与文件 syscall、**用户堆+文件映射（`memory.rs`：`brk`/`mmap`（匿名 + 文件映射：`MAP_PRIVATE` 可写不落盘 / `MAP_SHARED` 写回，含 `offset`）/`munmap`（共享页先写回）/`msync`）**、**进程调用（`process.rs`：`fork`/`execve`（argv+envp 用户栈）/`wait4` + `getprocs`）**、**目录枚举（`dir.rs`：`getdents`）**、**最小动态链接（`dynamic.rs`：`ET_DYN`/`PT_INTERP`/`DT_NEEDED`/重定位）**、**UDP 套接字（`socket.rs`：`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）** | v0.6–v0.7 ✅ / v0.9 第一·三·五·六步 ✅ / v1.0 第四·五步 ✅ |
 | `kernel/src/fs/` | VFS 抽象（trait + 路径工具）、挂载表路由、RAMFS、fd 表、**FAT12/16/32 只读后端**；**CSS-2 收口：后端能力位/卷信息、挂载表带卷身份与多挂载点、卸载、挂载错误改 errno** | v0.7 ✅ / v0.8 ✅ / CSS-2 ✅ |
 | `kernel/src/driver/` | 串口（v0.1）、键盘（v0.4）、**驱动注册框架 / PCI 枚举 / 块设备抽象 / virtio-blk**（v0.8 ✅） | v0.4 / v0.8 |
 | `kernel/src/driver/{pci,driver,block,virtio_blk}.rs` | `pci` 只回答「总线上有什么」；`driver` 回答「谁来管它」（`Driver` trait + `probe_all`）；`block` 是上层唯一可见的按扇区接口；`virtio_blk` 是具体实现（同时实现 `Driver` 与 `BlockDevice`） | v0.8 ✅ |

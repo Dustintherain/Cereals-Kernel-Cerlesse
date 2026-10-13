@@ -33,7 +33,7 @@
 编号沿用 **Linux x86_64** 语义，便于将来直接运行现成用户态程序。
 `0..=255` 沿用 Linux 语义，`256..` 是 Cerlesse 扩展号段（256 = `getprocs`，257–260 是 CKM 号段
 —— 257/258/259 已在 CKM-1 实现，260 预留给 CKM-4；261–266 由 CSS 使用，其中 261/262/263/264/265
-已实现、只有 266 `storage_format` 待 CSS-4；267 = `net_config`，v1.0 新增）；号段上限 `SYS_MAX = 268`；
+已实现、只有 266 `storage_format` 待 CSS-4；267 = `net_config`，v1.0 新增）；`26 msync` 同样在 v1.0 第五步从 ENOSYS 桩上摘下来；号段上限 `SYS_MAX = 268`；
 **号越界**与**号合法但未实现**是两种可区分的失败（前者 `parse` 返回 `None`，后者落在公共 ENOSYS 桩，均返回 `-ENOSYS`）。
 
 | 号 | 名称 | 状态 | 说明 |
@@ -42,9 +42,10 @@
 | 1 | `write` | ✅ | fd 1/2 写串口，fd ≥ 3 写文件 |
 | 2 | `open` | ✅ | 打开/创建文件，返回 fd（≥ 3） |
 | 3 | `close` | ✅ | 关闭动态 fd |
-| 9 | `mmap` | ✅ | 匿名私有映射；第 6 参数 `offset`（`r9`）+ 文件映射（只读私有，v1.0） |
+| 9 | `mmap` | ✅ | 匿名私有映射；第 6 参数 `offset`（`r9`）+ 文件映射（`MAP_PRIVATE` 可写不落盘 / `MAP_SHARED` 写回，v1.0） |
+| 26 | `msync` | ✅ | 把 `MAP_SHARED` 文件映射的页写回文件（v1.0 第五步） |
 | 10 | `mprotect` | ✅ | 改写**已映射**页的保护属性（`PROT_NONE` = ring3 不可访问但帧保留） |
-| 11 | `munmap` | ✅ | 整段归还匿名映射 |
+| 11 | `munmap` | ✅ | 整段归还映射（共享文件页先写回；共享映射必须整段归还） |
 | 12 | `brk` | ✅ | 调整用户堆顶（Linux 语义） |
 | 35 | `nanosleep` | ✅ | 睡眠 N 个 PIT tick（100Hz） |
 | 39 | `getpid` | ✅ | 当前进程 PID |
@@ -127,10 +128,15 @@ isize mmap(usize len, i32 prot, i32 flags)   // libc: mmap(len: usize, prot: i32
 ```
 
 - **匿名映射**：`flags` 含 `MAP_PRIVATE|MAP_ANONYMOUS`，`fd = -1`，`offset = 0`（非 0 `-EINVAL`）。
-- **文件映射（v1.0 第三步）**：`fd ≥ 3` 且可读、`flags = MAP_PRIVATE`、**只读**（拒绝 `PROT_WRITE`/`PROT_EXEC`）、`offset` **页对齐**；把文件 `[offset, offset+len)` 拷进新映射（文件尾之后补零）。`MAP_SHARED` 未实现。
+- **文件映射（v1.0 第三步只读、第五步可写）**：`fd ≥ 3` 且可读、`flags` 恰为 `MAP_PRIVATE` **或**
+  `MAP_SHARED`、`prot` 不含 `PROT_EXEC`、`offset` **页对齐**；把文件 `[offset, offset+len)` 与文件的
+  交集拷进新映射（文件尾之后补零）。`MAP_PRIVATE` 的改写只留在本进程（不落盘）；
+  `MAP_SHARED` 在 `msync`/`munmap` 时**写回文件**，`prot` 含 `PROT_WRITE` 时要求 fd **打开可写**
+  （否则 `-EBADF`）；描述符表 4 槽用尽 → `-ENOMEM`。`MAP_SHARED|MAP_ANONYMOUS` 仍未实现。
 - `prot` 允许 `PROT_READ`(0x1) / `PROT_WRITE`(0x2) / `PROT_EXEC`(0x4) / `PROT_NONE`(0x0，v1.0 起：映射存在但 ring3 不可访问，可由 `mprotect` 启用)；拒绝 `PROT_WRITE|PROT_EXEC`（W^X）。
 - 返回页对齐地址（> 0）或负 errno；**新页保证全零**；窗口 256 KiB，first-fit。
-- 错误：`EINVAL`（位非法/文件映射）、`ENOMEM`（超窗口/无空闲帧）。
+- 错误：`EINVAL`（位非法/文件映射参数）、`EBADF`（`MAP_SHARED|PROT_WRITE` 但 fd 只读/未打开）、
+  `ENOMEM`（超窗口/无空闲帧/共享映射描述符用尽）。
 
 ### 2.6 `mprotect`（nr=10）
 
@@ -155,7 +161,10 @@ isize munmap(u64 addr, usize len)   // libc: munmap(addr: u64, len: usize) -> is
 ```
 
 - 整段归还（要求页对齐且全段已映射）；清页表项并 `invlpg`，不留幽灵映射。
-- 错误：`EINVAL`。
+- **共享文件页在归还之前写回**（v1.0 第五步）：写回失败不阻止归还，只留一行
+  `user: munmap writeback errno=<n>`；一次**会被拒**的归还（对齐/窗口/未映射/部分覆盖共享映射）
+  不产生任何 I/O。
+- 错误：`EINVAL`（含「共享文件映射必须整段归还」，v1 不做 VMA 分裂）。
 
 ### 2.8 `brk`（nr=12）
 
@@ -311,6 +320,25 @@ UDP 套接字最小集（`AF_INET` + `SOCK_DGRAM`）。地址用 16 字节 `sock
 
 返回 16；`buf_len < 16` → `-EINVAL`；没有网卡 / DHCP 尚未成功 → `-ENODEV`。
 
+### 2.20 `msync`（nr=26，v1.0 第五步）
+
+```
+isize msync(u64 addr, usize len, i32 flags)   // libc: msync(addr: u64, len: usize, flags: i32) -> isize
+```
+
+- 把 `MAP_SHARED` **文件映射**的页写回文件；成功返回 `0`。
+- **只有共享文件页会被写回**：`MAP_PRIVATE` 文件页与匿名页跳过（串口上 `pages=0 bytes=0`）——
+  对一段纯匿名内存调用它是**合法**的空操作，不是错误。
+- 每页写回 `min(PAGE_SIZE, file_len − 页文件偏移)` 字节，`file_len` 是 **`mmap` 那一刻**的文件大小：
+  映射比文件长（尾部补零）**不会把文件撑大**。
+- `flags`：至少要有一位 `MS_SYNC`(0x4) 或 `MS_ASYNC`(0x1)（本内核同步写回，二者等价）；
+  `MS_INVALIDATE`(0x2) 接受并忽略；未知位 `-EINVAL`。
+- 要求：`addr` 页对齐、`len > 0`、范围在 mmap 窗口内且**每一页已映射**，缺一即 `-EINVAL`
+  （Linux 这里用 `-ENOMEM`；本内核与 `munmap`/`mprotect` 保持同一约定）。
+- 写回失败（文件系统只读等）返回 `vfs::write` 的 `-errno`；**不回滚**已写回的页。
+- 证据行：`user: msync addr=… len=… flags=0x? -> pages=N bytes=M`（失败则
+  `user: msync errno=<n> …`）。
+
 ## 3. errno 常量
 
 | 数值 | 名称 | 含义 | 用户态 `libc` 导出 |
@@ -349,9 +377,10 @@ UDP 套接字最小集（`AF_INET` + `SOCK_DGRAM`）。地址用 16 字节 `sock
 | `brk` | `fn brk(addr: u64) -> u64` | Linux 语义，失败返回原值 |
 | `mmap` | `fn mmap(len: usize, prot: i32, flags: i32) -> isize` | 匿名私有（`offset` 固定 0） |
 | `mmap_with_offset` | `fn mmap_with_offset(len, prot, flags, offset: u64) -> isize` | 带 `offset`（`r9`）；匿名映射要求 `offset=0` |
-| `mmap_file` | `fn mmap_file(fd: i32, len, prot, flags, offset: u64) -> isize` | 只读私有文件映射（`MAP_PRIVATE`、`PROT_READ`、`offset` 页对齐） |
+| `mmap_file` | `fn mmap_file(fd: i32, len, prot, flags, offset: u64) -> isize` | 文件映射：`MAP_PRIVATE`（可写不落盘）或 `MAP_SHARED`（写回），`offset` 页对齐 |
 | `mprotect` | `fn mprotect(addr: u64, len: usize, prot: i32) -> isize` | 改写已映射页的保护属性（v1.0） |
-| `munmap` | `fn munmap(addr: u64, len: usize) -> isize` | |
+| `munmap` | `fn munmap(addr: u64, len: usize) -> isize` | 归还；共享文件页在归还前自动写回 |
+| `msync` | `fn msync(addr: u64, len: usize, flags: i32) -> isize` | 显式写回 `MAP_SHARED` 文件页（v1.0 第五步） |
 | `getpid` | `fn getpid() -> u64` | |
 | `nanosleep` | `fn nanosleep(ticks: u64) -> isize` | 1 tick = 10ms |
 | `fork` | `fn fork() -> isize` | 父 = 子 PID，子 = 0 |
@@ -386,7 +415,9 @@ UDP 套接字最小集（`AF_INET` + `SOCK_DGRAM`）。地址用 16 字节 `sock
 - fd：`STDIN = 0`、`STDOUT = 1`、`STDERR = 2`、`FD_FIRST_DYNAMIC = 3`。
 - `open` 标志：`O_RDONLY = 0`、`O_WRONLY = 1`、`O_RDWR = 2`、`O_CREAT = 0o100`。
 - `mmap`/`mprotect` 保护位：`PROT_NONE = 0x0`、`PROT_READ = 0x1`、`PROT_WRITE = 0x2`、`PROT_EXEC = 0x4`。
-- `mmap` 标志：`MAP_PRIVATE = 0x2`、`MAP_ANONYMOUS = 0x20`。
+- `mmap` 标志：`MAP_SHARED = 0x1`、`MAP_PRIVATE = 0x2`、`MAP_ANONYMOUS = 0x20`
+  （`MAP_SHARED|MAP_ANONYMOUS` 仍未实现）。
+- `msync` 标志：`MS_ASYNC = 0x1`、`MS_INVALIDATE = 0x2`、`MS_SYNC = 0x4`。
 - errno：`ENOENT/EBADF/ECHILD/EAGAIN/ENOMEM/EFAULT/EISDIR/EINVAL/ENOSPC/ENOSYS/EPERM/EACCES`（数值见第 3 节）。
 - socket（v1.0）：`AF_INET = 2`、`SOCK_DGRAM = 2`、`IPPROTO_UDP = 17`、`UDP_PAYLOAD_MAX = 1472`、
   `sockaddr_in` 布局 `SOCKADDR_IN_SIZE = 16`、`NET_CONFIG_SIZE = 16`；errno 追加
@@ -574,15 +605,15 @@ make clean
 | `test-scheduler` | Round Robin 轮转 | — |
 | `test-ipc` | pipe 创建/写/读 | — |
 | `test-fs` | VFS 路由 + RAMFS 读/写/ls + 负例 | 21 |
-| `test-user` | ELF 装载 + 文件 syscall + 用户堆 + `mprotect`（`PROT_NONE`/`RX` 转换）+ 隔离 + Shell + 动态链接 + `/init` 的 CKM-1 证据 | 91 |
+| `test-user` | ELF 装载 + 文件 syscall + 用户堆 + `mprotect`（`PROT_NONE`/`RX` 转换）+ 文件映射（只读/可写/共享 + `msync`）+ 隔离 + Shell + 动态链接 + `/init` 的 CKM-1 证据 | 136 |
 | `test-ckm` | CKM-1：内核能力判定自测（46 项）+ `/init` 的允许/拒绝 + 组件枚举确定性 + 审计环回绕 | 22 + 2 正则 |
 | `test-shell` | 交互式 Shell（注入按键） | 11 |
-| `test-proc` | fork/execve/wait4 全链路 + PID 一致性 | 8 + 4 正则 |
-| `test-programs` | getdents/getprocs + 基础用户程序（含 `/bin/volumes`）真的被 exec | 23 + 6 正则 |
+| `test-proc` | fork/execve/wait4 全链路 + PID 一致性 | 26 + 4 正则 |
+| `test-programs` | getdents/getprocs + 基础用户程序（含 `/bin/volumes`）真的被 exec | 32 + 7 正则 |
 | `storage-images` | 生成 GPT/MBR/主表损坏/无表四类夹具镜像（不启 QEMU） | — |
 | `test-storage-fixtures` | 夹具结构断言（GPT 主/备表头 + CRC、MBR 四主分区 + EBR 链） | — |
-| `test-storage` | 卷枚举确定性 + 无分区表退化 + 只读原因 + `degraded`（GPT 场景） | 26 |
-| `test-storage-mbr` | MBR 场景：EBR 链 + 未识别文件系统仍可见 | 13 |
+| `test-storage` | 卷枚举确定性 + 无分区表退化 + 只读原因 + `degraded`（GPT 场景） | 40 + 3 正则 |
+| `test-storage-mbr` | MBR 场景：EBR 链 + 未识别文件系统仍可见 | 15 + 1 正则 |
 | `test-network` | virtio-net → Ethernet/ARP/IPv4/UDP（DHCP 往返）+ ICMP Echo + UDP 套接字最小集（用户态 DHCP 往返） | 30 |
 | `test-dyn` | PT_INTERP + DT_NEEDED + RELATIVE/JUMP_SLOT（内核侧最小动态链接） | 10 |
 | `test-driver` | PCI 枚举 + 驱动挂接 + 扇区读写/负例 | 22 |
@@ -593,6 +624,7 @@ make clean
 
 | 日期 | 变更 |
 | ---- | ---- |
+| 2026-10-13 | **v1.0 第五步：可写 / 共享文件映射与 `msync`** —— 号表新增 26 `msync`，9 `mmap` 与 11 `munmap` 行改述为「文件映射可写 / 共享写回」「归还前写回」；新增 2.20 `msync` 逐条语义；2.5 的文件映射段落改为两种模式（`MAP_PRIVATE` 不落盘 / `MAP_SHARED` 写回 + 可写 fd 门槛 + 描述符 4 槽）；4.1 新增 `msync` 封装并改述 `mmap_file`，4.2 新增 `MAP_SHARED` 与 `MS_*`；第 7 节 `test-user` 91 → **136 项**，并同步 `test-proc`/`test-programs`/`test-storage`/`test-storage-mbr` 的陈旧计数（8 → 26 + 4、23 → 32 + 7、26 → 40 + 3、13 → 15 + 1） |
 | 2026-10-13 | **v1.0 第四步：UDP 套接字最小集** —— 号表新增 41 `socket`/44 `sendto`/45 `recvfrom`/49 `bind` 与 267 `net_config`，`SYS_MAX` 267 → **268**；新增 2.18/2.19（地址/记录布局与逐条语义）；4.1 新增五个封装与 `SockAddrIn`/`NetConfig`，4.2 新增 socket 常量与 errno；第 7 节 `test-network` 15 → **30 项** |
 | 2026-10-12 | **CKM-1（内核级权限控制）**：号表新增 `ckm_policy_query`(257)/`ckm_audit_read`(258)/`ckm_component_state`(259) 与 `ckm_policy_set`(260) 的 ENOSYS 行；新增 2.15/2.16/2.17（op 枚举、48/64 字节记录布局、errno）；4.1/4.2 新增 `libc` 封装、解析器与 `CAP_*`/`CKM_OP_*`/`EPERM`/`EACCES`/记录尺寸常量；号段说明改为「257–259 已实现」；第 7 节新增 `test-ckm`（22 + 2 正则）并标注 `test-user` 包含 CKM 证据 |
 | 2026-10-11 | **CSS-2（VFS 收口）**：5.1 节的 `FileSystem` 补 `caps`/`volume_info`（保守缺省）、`FatFs::open` 的错误类型改为 `OpenError { errno, reason }`、VFS 入口提 `route`/`backend_caps`/`backend_volume_info`、挂载表改为 `backends`+`mounts` 并补 `mount_volume`/`alias_volume`/`umount`；5.3 号表行标注 262–264 的内核落点已先备好 |

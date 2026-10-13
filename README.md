@@ -109,12 +109,12 @@ root@cerlesse C:>
 | --- | --- |
 | `make test` | 冒烟测试：断言串口出现 `Kernel started!` |
 | `make test-all` | 全部集成测试 + 边界门禁 |
-| `make test-user` | 用户态全链路：ELF 装载 + 文件 syscall + 用户堆 + 隔离 + Shell |
+| `make test-user` | 用户态全链路：ELF 装载 + 文件 syscall + 用户堆 + 文件映射（含 `MAP_SHARED` 写回 / `msync`）+ 隔离 + Shell |
 | `make test-shell` / `make test-proc` | 注入真实按键跑交互式 Shell / `fork` + `execve` + `wait4` |
 | `make test-programs` | 从 Shell 跑 `/bin/{ls,cat,echo,ps,volumes}`（`getdents` 列目录、`getprocs` 列进程、`storage_volumes` 列卷） |
 | `make test-ckm` / `make test-ckm-store` | CKM 权限/审计/组件状态 + 覆盖层（注册/撤销改变 `open` 结果）/ 可写状态区的**跨重启**持久化（写 → 重启 → 读回） |
 | `make test-fs` / `make test-fat` | VFS + RAMFS / FAT12/16/32 只读后端（双盘启动） |
-| `make test-driver` / `make test-network` | PCI 枚举 + virtio-blk / virtio-net + ARP + DHCP |
+| `make test-driver` / `make test-network` | PCI 枚举 + virtio-blk / virtio-net + ARP + DHCP + ICMP + UDP 套接字 |
 | `make test-dyn` / `make dyn-hostcheck` | 内核侧最小动态链接 / 同一批夹具交给宿主机 glibc `ld.so` 复核 |
 | `make test-storage` / `make test-storage-mbr` | GPT / MBR 分区镜像的卷枚举（`storage_volumes`）+ VFS 收口（卷身份上挂载点、多挂载点、卸载）+ 主机侧夹具复核 |
 | `make check` / `make abi-check` / `make check-boundary` | 主机侧门禁（**ABI 单一事实源** + 边界 + Go 单测）/ `abi` crate 自测（号/号段/记录尺寸/能力位）/ 内核不得依赖用户态 |
@@ -153,7 +153,9 @@ tests/     QEMU 集成测试与编排    docs/      开发文档（每个子系�
 
 v0.1 – v0.9 已全部实现并通过自动化验收：UEFI 引导 → 异常诊断 → 内存与内核堆 → 中断、时钟与键盘 → 进程与 Round Robin 调度 → `syscall` 与 ring3 隔离 → VFS/RAMFS/ELF 装载 → PCI、virtio-blk 与 FAT → 用户堆、交互式 Shell、`fork`/`execve`/`wait4`、简化网络栈、基础用户程序、内核侧最小动态链接。
 
-v1.0 正在进行（第一步：运行期内存保护 `mprotect`，2026-10-11 落地，`make test-user` 91 项 PASS；其余为权限与凭证、完整启动链、发布）。
+v1.0 正在进行（已落地：运行期内存保护 `mprotect`、环境变量 `envp` 与 `mmap` 的 `offset`、只读文件映射、
+ICMP ping、UDP 套接字最小集、**可写 / 共享文件映射与 `msync`**，`make test-user` 136 项 PASS；
+其余为权限与凭证、完整启动链、发布）。
 
 **v1.0 之后的目标定位**（[CKM 设计提案](docs/ckm.md)）：
 

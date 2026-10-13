@@ -14,7 +14,8 @@
   `make test-programs` 17 项 + 5 条正则 / `make test-dyn` 10 项 / `make test-fs` 21 项 PASS；
   环境变量（`envp`）与 `mmap` 的 `offset` 槽位（syscall ABI 扩到第 6 参数 `r9`）已落地；
   **文件映射**（只读私有，v1.0 第三步）已落地 —— `mmap` 的 `offset` 真正生效（见 3.13）；
-  仍未做：**完整**动态链接（用户态 `ld.so`，见 3.9）、**可写文件映射**（`MAP_SHARED`）
+  **可写私有 / 共享（`MAP_SHARED`）文件映射与 `msync`**（v1.0 第五步）也已落地（见 3.15）；
+  仍未做：**完整**动态链接（用户态 `ld.so`，见 3.9）
 - **阶段三（2026-10-12）**：调用号 / `errno` / 标志位 / 记录布局的**权威定义已移入 `abi/` crate**
   （单一事实源）：本文档的号段表与各记录布局由它校对，内核与 `libc` 都引用同一处；
   防漂移命令是 `make abi-check`（序号/号段/记录尺寸/能力位固化）+ `abi/src/record.rs`
@@ -41,7 +42,10 @@ v0.6 与 v0.7 一起构成系统调用 / 用户空间阶段，但两者有清晰
 8. **v1.0 第二步（已做）**：syscall ABI 扩到第 6 参数 `r9` —— 用户态环境变量 `envp`
    （`execve` 传递 + `libc::env` + Shell `env` 内建）与 `mmap` 的 `offset` 槽位一并落地（见 3.4）。
 9. **v1.0 第三步（已做）**：**文件映射**（`mmap` 只读私有文件映射，`offset` 页对齐）—— `offset` 真正生效（见 3.13）。
-10. **仍未做**：**完整**动态链接（用户态 `ld.so`）、**可写文件映射**（`MAP_SHARED`/写回）。
+10. **v1.0 第五步（已做）**：**可写 / 共享文件映射** —— `MAP_PRIVATE` 的改写留在本进程、
+   `MAP_SHARED` 的页在 `msync`/`munmap` 时写回文件（写回长度夹在映射那一刻的文件大小内），
+   见 3.15。**仍未做**：**完整**动态链接（用户态 `ld.so`）、**匿名**共享映射
+   （`MAP_SHARED|MAP_ANONYMOUS`：需要 `fork` 之间真正共享页帧）、脏页跟踪（当前按页整页写回）。
 
 ## 2. v0.6 实际实现（2026-10-10 落地）
 
@@ -134,8 +138,9 @@ v0.6 与 v0.7 一起构成系统调用 / 用户空间阶段，但两者有清晰
 | `sleep`（nanosleep） | 35 | ✅ v0.6 | 以 PIT tick（10ms）为单位等待；期间 `sti; hlt` 让 PIT 继续推进 |
 | `getpid` | 39 | ✅ v0.6 | 返回当前用户程序 PID（串口打印 `user: getpid -> N`） |
 | `exit` | 60 | ✅ v0.6 | 记录退出码并结束用户态执行（不返回） |
-| `mmap` | 9 | ✅ v0.9 第一步 / v1.0 第二·三步 | **匿名**：`MAP_PRIVATE\|MAP_ANONYMOUS`、`fd = -1`、`offset = 0`；**文件**（v1.0 第三步）：`fd ≥ 3` 可读、`MAP_PRIVATE`、只读（拒绝 `PROT_WRITE`/`PROT_EXEC`）、`offset` 页对齐，把 `[offset, offset+len)` 拷进新映射；first-fit 落在 256 KiB 的 mmap 窗口；新页**保证全零**；W^X 生效；`PROT_NONE` 合法（见 3.10） |
-| `munmap` | 11 | ✅ v0.9 第一步 | 整段归还：页对齐 + 全段已映射，否则 `-EINVAL`；执行时清页表项 **并 `invlpg`**（否则 TLB 会留下幽灵映射） |
+| `mmap` | 9 | ✅ v0.9 第一步 / v1.0 第二·三·五步 | **匿名**：`MAP_PRIVATE\|MAP_ANONYMOUS`、`fd = -1`、`offset = 0`；**文件**：`fd ≥ 3` 可读、`flags` 恰为 `MAP_PRIVATE` 或 `MAP_SHARED`、`prot` 不含 `PROT_EXEC`、`offset` 页对齐，把 `[offset, offset+len)` 与文件的交集拷进新映射（文件尾补零）；`MAP_SHARED|PROT_WRITE` 额外要求 fd **打开可写**（否则 `-EBADF`）；first-fit 落在 256 KiB 的 mmap 窗口；新页**保证全零**；W^X 生效；`PROT_NONE` 合法（见 3.10/3.15） |
+| `munmap` | 11 | ✅ v0.9 第一步 / v1.0 第五步 | 整段归还：页对齐 + 全段已映射 + 共享文件映射**整段**覆盖，否则 `-EINVAL`；共享文件页在归还**之前**先写回（写回失败不阻止归还，只留串口记录）；执行时清页表项 **并 `invlpg`**（否则 TLB 会留下幽灵映射） |
+| `msync` | 26 | ✅ v1.0 第五步 | 把 `MAP_SHARED` 文件映射的页写回文件：页对齐、非空、范围在 mmap 窗口内且每页已映射（缺一即 `-EINVAL`）；非共享页跳过（`pages=0`）；`flags` 至少要有 `MS_SYNC`/`MS_ASYNC`（本内核二者等价）；写回长度夹在映射那一刻的文件大小内（见 3.15） |
 | `brk` | 12 | ✅ v0.9 第一步 | 增长/收缩堆顶（窗口 256 KiB）；`addr = 0` 只查询；**Linux 语义：不返回错误**，失败返回原值（`ret < addr` 即失败）；增长全成或全不成 |
 | `fork` / `execve` / `wait4` | 57 / 59 / 61 | ✅ v0.9 第三步 / v1.0 第二步 | `fork` 复制地址空间与当前用户帧（子进程 `rax=0`、父进程得 PID）；`execve(path, argv, envp)` 换映像并重建 argv/envp 用户栈（**成功不返回**；`envp` = `args[4]`/`args[5]`，见 3.4）；`wait4(pid)` 运行并回收直接子进程、返回退出码（非子进程 `-ECHILD`）；详见 3.7 |
 | `mprotect` | 10 | ✅ v1.0 第一步 | 改写**已映射**页的保护属性（页对齐、`len > 0`、范围不跨窗口、每页已映射，缺一即 `-EINVAL`）；`PROT_WRITE\|PROT_EXEC` 仍拒绝（W^X）；`PROT_NONE` 清 `USER` 位而保留 `PRESENT`（帧与内容都在，可改回来）；用户栈固定 `RW`+`NX`，不在支持范围 —— 详见 3.10 |
@@ -144,7 +149,7 @@ v0.6 与 v0.7 一起构成系统调用 / 用户空间阶段，但两者有清晰
 | `recvfrom` | 45 | ✅ v1.0 第四步 | `recvfrom(fd, buf, len, flags, addr, addr_len_ptr)`：内核同步轮询网卡收一个数据报并回填发送方地址；未 `bind` → `-EINVAL`、2 秒超时 → `-EAGAIN` |
 | `bind` | 49 | ✅ v1.0 第四步 | `bind(fd, addr, addr_len)`：绑本地端口（`port = 0` 分配临时端口）；端口被占 `-EADDRINUSE`、非本机地址 `-EADDRNOTAVAIL` |
 
-分发表按 `SYS_MAX`(=268) 排满：未实现的号落在公共 ENOSYS 桩，
+分发表按 `SYS_MAX`(=268) 排满：未实现的号落在公共 ENOSYS 桩（`26 msync` 在 v1.0 第五步从桩上摘下来），
 「号合法但未实现」与「号越界」是两种可区分的失败路径。
 号段划分：`0..=255` 沿用 Linux 语义，`>= 256` 是 Cerlesse 扩展 —— `256` = `getprocs`、
 `257..=260` 由 CKM 提案预留、`261..=266` 由 CSS 使用（已实现 **261 `storage_volumes`**、
@@ -381,7 +386,9 @@ user/hello (Rust + libc)
 - ~~用户堆~~ → **已做**（3.5：`brk`/`mmap`/`munmap` + libc 全局分配器）；
   ~~`mprotect`（`PROT_NONE`、W^X 转换）~~ → **已做**（3.10）；
   ~~`mmap` 的 `offset` 槽位~~ → **已做**（v1.0 第二步：ABI 扩到 `r9`，匿名映射要求 `offset=0`）；
-  ~~文件映射~~ → **已做**（v1.0 第三步：只读私有映射，见 3.13）；**可写**文件映射（`MAP_SHARED`）仍缺；
+  ~~文件映射~~ → **已做**（v1.0 第三步：只读私有映射，见 3.13）；
+  ~~**可写**文件映射（`MAP_SHARED`/写回）~~ → **已做**（v1.0 第五步：`MAP_PRIVATE` 可写不落盘、
+  `MAP_SHARED` 写回 + `msync`，见 3.15）；**匿名**共享映射（`MAP_SHARED|MAP_ANONYMOUS`）仍缺；
 - ~~`stdin`~~ → **已做**（3.6：键盘行缓冲 → `read(0)` 整行交付）；
 - ~~**`fork`/`execve`/`wait4` 与进程对象**~~ → **已做**（3.7）：每进程地址空间 +
   每进程内核栈 + 停在 syscall 里的完整用户帧，Shell 的外部程序（`/bin/hello`）已能跑；
@@ -422,10 +429,12 @@ v0.9 的运行时前置条件按依赖顺序补：**先有可分配的用户内�
    `user: frames free before=119159 after=119159` → `user: heap frame reclamation PASS`
    （内核在 selftest 里直接对比帧分配器的 `free_frames`，不靠日志措辞）。
 
-负例也逐条具体（不是「都失败就行」）：无有效 fd（文件映射）/ `MAP_SHARED` / `PROT_WRITE|PROT_EXEC` /
+负例也逐条具体（不是「都失败就行」）：无有效 fd（文件映射）/ `PROT_EXEC`（文件映射不可执行）/
+只读 fd 上的 `MAP_SHARED|PROT_WRITE`（`-EBADF`(-9)）/ 部分归还共享映射 / `PROT_WRITE|PROT_EXEC` /
 未对齐的 `munmap` / 重复 `munmap` → `-EINVAL`(-22)；超过 256 KiB 窗口 → `-ENOMEM`(-12)。
 
-**仍然没有的**（写下来避免误读）：**可写**文件映射（只读私有映射已由 v1.0 第三步补上，见 3.13）、
+**仍然没有的**（写下来避免误读）：**匿名**共享映射（`MAP_SHARED|MAP_ANONYMOUS`；文件映射的可写与
+写回已由 v1.0 第五步补上，见 3.15）、**脏页跟踪**（共享文件页按页整页写回，不是只写改动过的字节）、
 回收式分配器（`dealloc` 是空操作：一次运行结束由内核整棵释放；长驻程序的内存占用会单调上升）。
 （`mprotect` 已由 v1.0 第一步补上，见 3.10。）
 
@@ -761,18 +770,19 @@ CSS-3（见 [storage.md](./storage.md) 第 4/9 节）把 262/263/264 从 ENOSYS 
 
 **文件映射（v1.0 第三步）**：`fd ≥ 3`、`flags = MAP_PRIVATE`、**只读**（拒绝
 `PROT_WRITE`/`PROT_EXEC`）、`offset` 页对齐 —— 把文件 `[offset, offset+len)` 的字节
-拷进新映射（文件尾之后补零）。`MAP_SHARED`（写回文件）仍未实现，明确拒绝。
-`mmap` 的 `fd` 不再是常量：`fd = -1` + `MAP_ANONYMOUS` 走匿名路径，`fd ≥ 3` 且无
-`MAP_ANONYMOUS` 走文件路径。
+拷进新映射（文件尾之后补零）。`mmap` 的 `fd` 不再是常量：`fd = -1` + `MAP_ANONYMOUS`
+走匿名路径，`fd ≥ 3` 且无 `MAP_ANONYMOUS` 走文件路径。
+（**可写**与 **`MAP_SHARED` 写回**已由 v1.0 第五步补上，见 3.15 —— 本节的「只读」描述
+只描述第三步当时的状态。）
 
 验收（`make test-user`）：
 
 - `hello: filemmap wrote=5120` → `hello: filemmap contents=1` → `hello: filemmap munmap ret=0`：
   `/init` 造一个 5120 字节模式文件，再 `mmap_file(fd, 4096, PROT_READ, MAP_PRIVATE, 4096)`，
   逐字节校验 `[4096, 5120)` 的内容与 `offset` 真的生效；
-- `user: mmap rejected (file-backed mmap offset must be page-aligned)` /
-  `(file-backed mmap is read-only (no PROT_WRITE/PROT_EXEC))` /
-  `(file-backed mmap supports MAP_PRIVATE only (no MAP_SHARED))` + 对应 `-22`：三类拒绝各一条。
+- `user: mmap rejected (file-backed mmap offset must be page-aligned)` + `-22`：非页对齐 `offset`
+  被拒（第五步把另外两类换成了 `(file-backed mmap is not executable (no PROT_EXEC))` 与
+  `(MAP_SHARED|PROT_WRITE needs an fd open for writing)`，见 3.15）。
 
 ### 3.14 UDP 套接字最小集（v1.0 第四步，2026-10-13 落地）
 
@@ -830,6 +840,66 @@ CSS-3（见 [storage.md](./storage.md) 第 4/9 节）把 262/263/264 从 ENOSYS 
 **仍未做**：TCP（三次握手/可靠传输）、`connect`/`listen`/`accept`、`MSG_*` 标志、
 等待队列与超时重传、`SO_*` 选项 —— 都在后续项里，这里明确拒绝而不是静默忽略。
 
+### 3.15 可写 / 共享文件映射与 `msync`（v1.0 第五步，2026-10-13 落地）
+
+分析文档里 3.13 留下的口子 ——「文件映射是**只读私有**的，`MAP_SHARED`（写回文件）明确拒绝」——
+在这一步补上：**可写私有映射不落盘、共享映射写回文件**，并新增 `msync` 让用户态显式控制写回时机。
+
+**语义（与 Linux 对齐的部分，以及刻意偏离的部分）**：
+
+| 维度 | 本内核 | 说明 |
+| ---- | ---- | ---- |
+| `MAP_PRIVATE` + `PROT_WRITE` | ✅ 可写、**不落盘** | 与匿名映射同构：页是文件的**副本**，`munmap` 后改动消失（3.13 里这类请求是 `-EINVAL`） |
+| `MAP_SHARED` + `PROT_WRITE` | ✅ 可写、`msync`/`munmap` 写回 | 需要 fd **打开可写**（只读 fd → `-EBADF`，比等到 `msync` 才失败清楚） |
+| `MAP_SHARED`（只读） | ✅ | 不需要写回，因此只读 fd 也合法 |
+| `PROT_EXEC`（文件映射） | ❌ `-EINVAL` | 文件映射不可执行（W^X 的延伸，v1.0 第三步起如此） |
+| `MAP_SHARED\|MAP_ANONYMOUS` | ❌ `-EINVAL` | 需要 `fork` 之间真正共享页帧（`fork` 目前逐页复制），仍未实现 |
+| 写回范围 | `min(PAGE_SIZE, file_len − 页文件偏移)` | `file_len` 是 **`mmap` 那一刻**的文件大小：映射比文件长（尾部补零）**不会把文件撑大** |
+| 写回粒度 | **按页整页**（未改动过的字节也会被写回） | v1 没有脏页跟踪：用户写发生在 ring3，内核只有在 #PF 可恢复时才拦得住写；当前 #PF 即进程终止，因此不装「写保护 + 缺页置脏」这套机制 |
+| `msync` 的 `MS_ASYNC` | 与 `MS_SYNC` 等价 | 内核里没有回写线程；常量存在是为了将来异步化时用户态不用改 |
+| `msync` 的 `MS_INVALIDATE` | 接受并忽略 | 没有页缓存可以让别的映射失效 |
+| `msync` 的范围错误 | `-EINVAL`（Linux 用 `-ENOMEM`） | 与 `munmap`/`mprotect` 的「整段已映射」同一约定，全内核一致 |
+| 部分 `munmap` 共享映射 | `-EINVAL` | 描述符按**整段**登记；允许部分归还就得做 VMA 分裂（v1 不做） |
+| `fork` 之后的共享映射 | 父子各写各的地址空间，但**写回同一个文件** | 描述符随 `fork` 复制（路径也复制）；没有真实的页缓存/VMA 共享，这是已知简化 |
+
+**内核实现**：
+
+| 位置 | 内容 |
+| ---- | ---- |
+| `address_space.rs::UserSpace` | 新增 `mmap_files: [Option<MmapFileDesc>; MMAP_FILES_MAX]`（**4 槽**）：每段共享文件映射一条 `{start, pages, offset, file_len, path[128], path_len}`。描述符随进程走，`fork` 时复制。描述符满 → `-ENOMEM` 并**回滚**刚建的映射 |
+| `address_space.rs::mmap_alloc` | 从 `mmap_anon` 抽出的公共分配器（first-fit + 逐页 `map_new_page`），匿名与文件映射共用 |
+| `address_space.rs::mmap_file` | 分配页并登记描述符（`MAP_PRIVATE` 不登记：那类页与匿名同构） |
+| `address_space.rs::mmap_writeback` | 写回：只处理共享文件页，每页写 `min(PAGE_SIZE, file_len − 偏移)` 字节，`vfs::write` 失败即返回其 `-errno` |
+| `address_space.rs::munmap_check` / `munmap` | 校验与归还拆开：`munmap_check` 先把「对齐 / 窗口 / 全段已映射 / 共享映射整段覆盖」全查完，`munmap` 再释放描述符与页帧。**顺序是刻意的** —— 一次注定失败的 `munmap` 不会产生任何 I/O |
+| `syscall/memory.rs::sys_munmap` | **先校验 → 再写回 → 最后归还**；写回失败只留一行 `user: munmap writeback errno=<n>`，归还照常成功（Linux 的 `munmap` 也不会因为回写失败而失败） |
+| `syscall/memory.rs::sys_msync` | 号 **26**（Linux 名）：`flags` 未知位 `-EINVAL`、至少一位 `MS_SYNC`/`MS_ASYNC`、页对齐、`len > 0`；成功打 `user: msync addr=… len=… flags=0x? -> pages=N bytes=M` |
+| `fs/file.rs::is_writable` | 新增（与 `is_readable` 对称）：`MAP_SHARED|PROT_WRITE` 的 fd 门槛 |
+| `abi` | `flags.rs` 新增 `MAP_SHARED`/`MAP_TYPE`/`MAP_ANON_SUPPORTED`/`MS_ASYNC`/`MS_INVALIDATE`/`MS_SYNC`/`MS_SUPPORTED`；`syscall.rs` 新增 `SYS_MSYNC = 26`（`NAMED` 31 → **32**，`SYS_MAX` 不变 = 268），`record.rs`/`lib.rs` 的编译期与单元断言同步 |
+
+**验收（`make test-user` 111 → 136 项，串口逐条断言）**：
+
+- `user: mmap len=4096 prot=0x3 flags=0x1 offset=0x0 file=/tmp/shared.bin -> 0x… pages=1 shared=1`：
+  `MAP_SHARED` 映射建立（`shared=1` 只出现在共享映射上）；
+- `user: msync addr=0x… len=4096 flags=0x4 -> pages=1 bytes=2048` + `hello: sharedmmap persisted=1 filelen=2048`：
+  `/init` 在 ring3 改了首字节 / 第 100 字节 / 最后一字节，`msync` 后**回读文件**逐字节校验，
+  且文件长度仍是 2048（映射 4 KiB > 文件 2 KiB —— 写回被夹住，没有把文件撑大）；
+- `user: munmap writeback pages=1 bytes=2048` + `hello: sharedmmap munmap persisted=1`：
+  不 `msync`、直接 `munmap` 也会写回（归还前的自动回写）；
+- `user: msync … flags=0x4 -> pages=0 bytes=0` + `hello: sharedmmap anon msync ret=0`：
+  对纯匿名映射 `msync` 是合法但空操作（跳过非共享页而不是报错）；
+- 负例：`hello: filemmap exec ret=-22`（文件映射不可执行）、
+  `user: mmap rejected (MAP_SHARED|PROT_WRITE needs an fd open for writing) path=/tmp/mmap.bin`
+  + `hello: filemmap shared ro ret=-9`（`-EBADF`）、
+  `user: munmap errno=22 addr=0x… len=4096 (…a shared file mapping must be unmapped as a whole…)`
+  + `hello: sharedmmap partial munmap ret=-22`（**且这一行前没有写回行** —— 被拒的操作没有 I/O）、
+  `user: msync rejected (msync needs MS_SYNC or MS_ASYNC)` + `hello: sharedmmap msync noflag ret=-22`、
+  `user: msync errno=22 addr=0x800000000000 …` + `hello: sharedmmap msync bad addr ret=-22`（窗口外）；
+- `hello: filemmap private kept=1`：`MAP_PRIVATE` + 可写的改写**没有**出现在回读的文件里。
+
+**仍然没做的**（写下来避免误读）：**匿名**共享映射（`MAP_SHARED|MAP_ANONYMOUS`）、脏页跟踪
+（按页整页写回；需要可恢复的用户 `#PF` 才能做写保护置脏）、`MADV_*`/`mremap`、
+写回失败的回滚（此时可能已经写回了前面的页，串口如实记录）。
+
 ## 4. 调用链示例
 
 实际调用链（v0.7 + v0.9 用户堆 / 动态链接 + v1.0 `mprotect`）：
@@ -872,6 +942,7 @@ fd ≥ 3 一律经 VFS 抽象路由，syscall 层不认识具体后端。
 
 | 日期 | 变更 |
 | ---- | ---- |
+| 2026-10-13 | **v1.0 第五步：可写 / 共享文件映射与 `msync`** —— 新增 3.15；`abi::flags` 新增 `MAP_SHARED`/`MAP_TYPE`/`MAP_ANON_SUPPORTED`/`MS_ASYNC`/`MS_INVALIDATE`/`MS_SYNC`/`MS_SUPPORTED`，`abi::syscall` 新增 `SYS_MSYNC = 26`（`NAMED` 31 → **32**，`SYS_MAX` 不变），`record.rs`/`lib.rs` 断言同步；`address_space.rs` 新增共享文件映射描述符表（4 槽，`fork` 复制）与 `mmap_alloc`/`mmap_file`/`mmap_file_desc`/`mmap_range`/`mmap_writeback`/`munmap_check`（`munmap_anon` 更名 `munmap` 并释放描述符），`mmap_write` 改按描述符写回；`syscall/memory.rs::sys_mmap` 的文件分支改为「`MAP_PRIVATE` 或 `MAP_SHARED` | 不可执行 | `MAP_SHARED|PROT_WRITE` 要求可写 fd」，`sys_munmap` 改为**先校验 → 再写回 → 最后归还**（失败不产生 I/O），新增 `sys_msync` 并注册 26 号；`fs/file.rs` 新增 `is_writable`；`libc` 新增 `msync` 与 `MAP_SHARED`/`MS_*` 常量（`lib.rs` re-export），`mmap_file` 文档改述两种模式；`user/hello` 的 `file_mmap_selftest` 改为「`PROT_EXEC` 拒绝 + 只读 fd 上的共享写 `-EBADF` + `MAP_PRIVATE` 可写不落盘」，新增 `shared_mmap_selftest`（`msync` 写回 + 回读校验 + `munmap` 自动写回 + 部分归还/无 `MS_*`/窗口外三类负例 + 匿名映射空操作）；`make test-user` 111 → **136 项**（`orchestrate.json` 的 `user` 场景同步）；2.7 表、1 节清单、3.4/3.5 与 3.13 的引用同步 |
 | 2026-10-13 | **v1.0 第四步：UDP 套接字最小集（`socket`/`bind`/`sendto`/`recvfrom` + `net_config`）** —— 新增 3.14；`abi` 新增 `socket.rs`（地址族/类型/协议、`sockaddr_in` 与 `net_config` 布局）、扩 `SYS_MAX` 267 → **268** 与 `NAMED` 26 → 31、`errno` 增加 socket 类取值；`fs/file.rs` 把 fd 槽位泛化为 `Slot::{File,Socket}`（共用一个编号空间，`close` 返回 `ClosedFd`）；新增 `network/socket.rs`（8 槽套接字表 + 端口分配）与 `network/mod.rs` 的 `NetConfig`/`udp_send`/`udp_recv_poll`；新增 `syscall/socket.rs`（四个处理器 + `net_config`，按页校验用户缓冲）；`libc` 新增 `socket` 模块与五个包装；`user/hello` 新增 `socket_selftest`（DHCP DISCOVER→OFFER 真往返 + 5 个负例）；`make test-network` 期望 15 → **30 项**、`make test-user` 111 → **116 项**（`orchestrate.json` 的 `network` 场景同步）；2.7 表、SYS_MAX/号段说明同步 |
 | 2026-10-06 | 第一阶段创建占位 |
 | 2026-10-07 | 补记路线细化：明确 v0.6/v0.7 的分工、syscall 列表拆分、libc 封装位置与验收占位 |

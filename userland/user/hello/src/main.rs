@@ -14,7 +14,8 @@
 //! | 非法指针 `write` | syscall 参数校验 | `user: EFAULT write ...` / `hello: bad write ret=-14` |
 //! | `brk` / `mmap` / `munmap` | **用户堆**（v0.9 第一步） | `user: brk base=0x8000020000`、`user: mmap len=8192 ... -> 0x8000060000`、`hello: heap PASS` |
 //! | `mmap` 第 6 参数 `offset` | syscall ABI 扩到 `r9`（v1.0）；匿名映射非 0 `offset` 明确拒绝 | `hello: mmap offset ret=-22`、`hello: mmap zero-offset ret=...` |
-//! | **文件映射**（`offset` 真正生效） | v1.0 第三步：`fd` 指向的文件 `[offset,offset+len)` 只读映射、`offset` 页对齐 | `hello: filemmap contents=1`、`hello: filemmap misaligned ret=-22`、`hello: filemmap PASS=1` |
+//! | **文件映射**（`offset` 真正生效） | v1.0 第三步：`fd` 指向的文件 `[offset,offset+len)` 映射、`offset` 页对齐 | `hello: filemmap contents=1`、`hello: filemmap misaligned ret=-22`、`hello: filemmap PASS=1` |
+//! | **可写/共享文件映射 + `msync`** | v1.0 第五步：`MAP_PRIVATE` 改写不落盘；`MAP_SHARED` 在 `msync`/`munmap` 时写回文件（长度夹在文件大小内） | `user: msync addr=… -> pages=1 bytes=2048`、`hello: sharedmmap persisted=1`、`hello: sharedmmap PASS=1` |
 //! | `Vec` / `format!` | `#[global_allocator]` 真的落到内核 | `hello: vec len=200 sum=20100` |
 //! | `mprotect` | **运行时改保护属性**（v1.0 第一步）：`PROT_NONE` 关页 → 内核拒收该缓冲 → 恢复后内容原样 → 换 `RX` 并真的执行 | `user: mprotect addr=0x8000060000 len=4096 prot=0x0 -> pages=1`、`hello: mprotect none write ret=-14`、`hello: mprotect exec ret=42`、`hello: mprotect PASS=1` |
 //! | `nanosleep` | tick 真实推进 | `user: sleep done ticks=2` |
@@ -34,13 +35,13 @@ use libc::syscall::{raw, SYS_WRITE};
 use libc::{
     bind, brk, ckm_audit_read, ckm_component_state, ckm_policy_query, ckm_record_is_deny,
     ckm_record_need, close, component_id, component_kind, component_kind_name, component_state,
-    component_state_name, getpid, mmap, mmap_file, mmap_with_offset, mprotect, munmap, nanosleep,
-    net_config, open, println, read, recvfrom, sendto, socket,
-    storage_rescan, write, AF_INET, AUDIT_RECORD_SIZE, CAP_CKM_SERVICE, CKM_OP_FS_WRITE,
-    CKM_OP_POLICY_QUERY, CKM_OP_STATE_WRITE, CKM_PREFIX_ETC, COMPONENT_RECORD_SIZE, ENODEV, EPERM,
-    EADDRINUSE, EAFNOSUPPORT, EINVAL, ENOTSOCK, EPROTONOSUPPORT, INADDR_BROADCAST, IPPROTO_UDP,
-    MAP_ANONYMOUS, MAP_PRIVATE, O_CREAT, O_RDONLY, O_WRONLY, PROT_EXEC, PROT_NONE, PROT_READ,
-    PROT_WRITE, SOCK_DGRAM, SOCK_STREAM, STORAGE_RESCAN_ALL,
+    component_state_name, getpid, mmap, mmap_file, mmap_with_offset, mprotect, msync, munmap,
+    nanosleep, net_config, open, println, read, recvfrom, sendto, socket, storage_rescan, write,
+    AF_INET, AUDIT_RECORD_SIZE, CAP_CKM_SERVICE, CKM_OP_FS_WRITE, CKM_OP_POLICY_QUERY,
+    CKM_OP_STATE_WRITE, CKM_PREFIX_ETC, COMPONENT_RECORD_SIZE, ENODEV, EPERM, EADDRINUSE,
+    EAFNOSUPPORT, EINVAL, ENOTSOCK, EPROTONOSUPPORT, INADDR_BROADCAST, IPPROTO_UDP, MAP_ANONYMOUS,
+    MAP_PRIVATE, MAP_SHARED, MS_INVALIDATE, MS_SYNC, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY,
+    PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE, SOCK_DGRAM, SOCK_STREAM, STORAGE_RESCAN_ALL,
 };
 use libc::{AF_UNSPEC, NetConfig, SockAddrIn};
 
@@ -68,6 +69,10 @@ const MMAP_MAX: usize = 64 * 4096;
 /// 文件映射自测用的文件与长度（1 页 + 1 KiB，因此 `offset = 4096` 有意义）。
 const MMAP_FILE_PATH: &str = "/tmp/mmap.bin";
 const MMAP_FILE_LEN: usize = 5120;
+/// 共享映射（`MAP_SHARED`）自测用的文件与长度：**2 KiB**，而映射是 4 KiB ——
+/// 「映射比文件长」因此是可断言的（写回必须夹在文件大小内，不把文件撑大）。
+const SHARED_FILE_PATH: &str = "/tmp/shared.bin";
+const SHARED_FILE_LEN: usize = 2048;
 /// `mprotect` 自测里要从 ring3 **执行**的机器码：`mov eax, 42; ret`。
 ///
 /// 先以 `mmap(PROT_READ|PROT_WRITE)` 写进页里，再 `mprotect(RX)` 改成只读可执行 ——
@@ -125,8 +130,11 @@ pub extern "C" fn main() -> i32 {
     // ---- 5. 用户堆：brk / mmap / munmap（v0.9 运行时前置条件） ----
     let heap_ok = heap_selftest();
 
-    // ---- 5b. 文件映射：把文件的一段只读映射进内存（v1.0 第三步，`offset` 真正生效） ----
+    // ---- 5b. 文件映射：把文件的一段映射进内存（v1.0 第三步，`offset` 真正生效） ----
     let filemap_ok = file_mmap_selftest();
+
+    // ---- 5c. 共享文件映射：MAP_SHARED 的改动写回文件（v1.0 第五步 + `msync`） ----
+    let shared_ok = shared_mmap_selftest();
 
     // ---- 6. mprotect：PROT_NONE 关页 + RX 转换（v1.0 第一步） ----
     let prot_ok = mprotect_selftest();
@@ -142,6 +150,10 @@ pub extern "C" fn main() -> i32 {
     if !filemap_ok {
         println!("hello: filemmap FAIL");
         return 46;
+    }
+    if !shared_ok {
+        println!("hello: sharedmmap FAIL");
+        return 48;
     }
     if !prot_ok {
         println!("hello: mprotect FAIL");
@@ -589,15 +601,215 @@ fn file_mmap_selftest() -> bool {
     let misaligned = mmap_file(rfd as i32, 4096, PROT_READ, MAP_PRIVATE, 1);
     println!("hello: filemmap misaligned ret={}", misaligned);
     ok &= misaligned == -22; // offset 未页对齐
-    let writable = mmap_file(rfd as i32, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 0);
-    println!("hello: filemmap write ret={}", writable);
-    ok &= writable == -22; // 文件映射只读
-    let shared = mmap_file(rfd as i32, 4096, PROT_READ, 0x1, 0);
-    println!("hello: filemmap shared ret={}", shared);
-    ok &= shared == -22; // MAP_SHARED 未实现
+    let exec = mmap_file(rfd as i32, 4096, PROT_READ | PROT_EXEC, MAP_PRIVATE, 0);
+    println!("hello: filemmap exec ret={}", exec);
+    ok &= exec == -22; // 文件映射不可执行
+    let shared_ro = mmap_file(rfd as i32, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 0);
+    println!("hello: filemmap shared ro ret={}", shared_ro);
+    ok &= shared_ro == -9; // MAP_SHARED|PROT_WRITE 需要一个可写打开的 fd（EBADF）
     let _ = close(rfd as i32);
 
+    // 4) `MAP_PRIVATE` + 可写（v1.0 第五步）：内容是文件的副本，**改写不落盘**
+    let rwfd = open(MMAP_FILE_PATH, O_RDWR);
+    println!("hello: filemmap open rw fd={}", rwfd);
+    if rwfd < 0 {
+        return false;
+    }
+    let pm = mmap_file(rwfd as i32, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, 0);
+    println!("hello: filemmap private mmap ret={}", pm);
+    ok &= pm > 0;
+    if pm > 0 {
+        unsafe { core::ptr::write_volatile(pm as usize as *mut u8, 0x77) };
+        let un = munmap(pm as u64, 4096);
+        println!("hello: filemmap private munmap ret={}", un);
+        ok &= un == 0;
+        let mut one = [0u8; 1];
+        let n = read_head(MMAP_FILE_PATH, &mut one);
+        // 文件的第 0 字节是模式里的 0，`MAP_PRIVATE` 的改写不该出现在这里
+        let kept = n == 1 && one[0] == 0;
+        println!("hello: filemmap private kept={}", kept as u8);
+        ok &= kept;
+    }
+    let _ = close(rwfd as i32);
+
     println!("hello: filemmap PASS={}", ok as u8);
+    ok
+}
+
+/// 读文件**头部** `buf.len()` 字节，返回实际读到的字节数（出错返回 `-1`）。
+///
+/// 每次新开一个 fd：映射自测里别的 fd 的偏移不该被这个检查扰动。
+fn read_head(path: &str, buf: &mut [u8]) -> i32 {
+    let fd = open(path, O_RDONLY);
+    if fd < 0 {
+        return -1;
+    }
+    let mut done = 0usize;
+    while done < buf.len() {
+        let n = read(fd as i32, &mut buf[done..]);
+        if n <= 0 {
+            break;
+        }
+        done += n as usize;
+    }
+    let _ = close(fd as i32);
+    done as i32
+}
+
+/// 共享文件映射自测（v1.0 第五步）：`MAP_SHARED` 的改动要**真的落盘**。
+///
+/// 三件可断言的事实：
+///
+/// 1. `msync` 触发写回，回读文件能看到改动（`user: msync … -> pages=1 bytes=2048`）；
+/// 2. 不 `msync`、直接 `munmap` 也写回（归还之前内核自动回写一次）；
+/// 3. 写回被**夹在文件大小内**：映射 4 KiB 而文件 2 KiB，映射尾部那一页（填充零、
+///    或用户写进去的字节）不会把文件撑大 —— `hello: sharedmmap persisted=1 filelen=2048`。
+///
+/// 另加四类负例：文件映射不可执行（`-22`）、只读 fd 上的 `MAP_SHARED|PROT_WRITE`
+/// （`-9`，在 `file_mmap_selftest` 里）、共享映射的**部分** `munmap`（`-22`，
+/// 描述符按整段登记，不做 VMA 分裂）、`msync` 既没有 `MS_SYNC` 也没有 `MS_ASYNC`（`-22`）。
+fn shared_mmap_selftest() -> bool {
+    let mut ok = true;
+
+    // 1) 造一个 2048 字节的模式文件（byte[i] = i & 0xff）
+    let fd = open(SHARED_FILE_PATH, O_CREAT | O_WRONLY);
+    println!("hello: sharedmmap create {} fd={}", SHARED_FILE_PATH, fd);
+    if fd < 0 {
+        return false;
+    }
+    let mut buf = [0u8; 512];
+    let mut written = 0usize;
+    while written < SHARED_FILE_LEN {
+        for i in 0..buf.len() {
+            buf[i] = ((written + i) & 0xff) as u8;
+        }
+        let n = write(fd as i32, &buf);
+        if n <= 0 {
+            break;
+        }
+        written += n as usize;
+    }
+    let _ = close(fd as i32);
+    println!("hello: sharedmmap wrote={}", written);
+    ok &= written == SHARED_FILE_LEN;
+
+    // 2) 读写打开 + MAP_SHARED（一页 = 4 KiB，比文件长 2 KiB）
+    let rwfd = open(SHARED_FILE_PATH, O_RDWR);
+    println!("hello: sharedmmap open rw fd={}", rwfd);
+    if rwfd < 0 {
+        return false;
+    }
+    let m = mmap_file(rwfd as i32, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 0);
+    println!("hello: sharedmmap mmap ret={}", m);
+    if m <= 0 {
+        let _ = close(rwfd as i32);
+        return false;
+    }
+
+    // 3) 映射内容 = 文件内容，且文件尾之后是零
+    let p = m as usize as *mut u8;
+    let mut good = true;
+    for i in 0..SHARED_FILE_LEN {
+        if unsafe { core::ptr::read_volatile(p.add(i)) } != ((i & 0xff) as u8) {
+            good = false;
+        }
+    }
+    let tail = unsafe { core::ptr::read_volatile(p.add(SHARED_FILE_LEN)) };
+    println!(
+        "hello: sharedmmap contents={} tail0={}",
+        good as u8,
+        (tail == 0) as u8
+    );
+    ok &= good && tail == 0;
+
+    // 4) ring3 改三处：首字节、第 100 字节、文件最后一字节；
+    //    再往**文件尾之后**写一个字节 —— 它必须留在内存里（不落盘）
+    unsafe {
+        core::ptr::write_volatile(p, 0xA5);
+        core::ptr::write_volatile(p.add(100), 0x5A);
+        core::ptr::write_volatile(p.add(SHARED_FILE_LEN - 1), 0x11);
+        core::ptr::write_volatile(p.add(SHARED_FILE_LEN), 0xFF);
+    }
+
+    // 5) `msync` 显式写回
+    let ms = msync(m as u64, 4096, MS_SYNC);
+    println!("hello: sharedmmap msync ret={}", ms);
+    ok &= ms == 0;
+
+    // 6) 回读文件：三处改动都在、未改动的字节原样、文件长度仍是 2048
+    let mut head = [0u8; SHARED_FILE_LEN];
+    let got = read_head(SHARED_FILE_PATH, &mut head);
+    let persisted = got == SHARED_FILE_LEN as i32
+        && head[0] == 0xA5
+        && head[1] == 1
+        && head[100] == 0x5A
+        && head[SHARED_FILE_LEN - 1] == 0x11;
+    println!(
+        "hello: sharedmmap persisted={} filelen={}",
+        persisted as u8, got
+    );
+    ok &= persisted;
+
+    // 7) `munmap` 归还
+    let un = munmap(m as u64, 4096);
+    println!("hello: sharedmmap munmap ret={}", un);
+    ok &= un == 0;
+
+    // 8) 第二遍：不 `msync`，改完直接 `munmap` —— 归还前内核自动写回
+    let m2 = mmap_file(rwfd as i32, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, 0);
+    println!("hello: sharedmmap remap ret={}", m2);
+    ok &= m2 > 0;
+    if m2 > 0 {
+        // `msync` 的负例：只给 MS_INVALIDATE（既没有 MS_SYNC 也没有 MS_ASYNC）→ -22
+        let noflag = msync(m2 as u64, 4096, MS_INVALIDATE);
+        println!("hello: sharedmmap msync noflag ret={}", noflag);
+        ok &= noflag == -22;
+        unsafe { core::ptr::write_volatile(m2 as usize as *mut u8, 0x3C) };
+        let un2 = munmap(m2 as u64, 4096);
+        println!("hello: sharedmmap munmap2 ret={}", un2);
+        ok &= un2 == 0;
+        let mut one = [0u8; 1];
+        let n = read_head(SHARED_FILE_PATH, &mut one);
+        let persisted2 = n == 1 && one[0] == 0x3C;
+        println!("hello: sharedmmap munmap persisted={}", persisted2 as u8);
+        ok &= persisted2;
+    }
+
+    // 9) 负例：共享文件映射必须**整段**归还（两页映射只归还一页 → -22）
+    let partial = mmap_file(rwfd as i32, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, 0);
+    println!("hello: sharedmmap partial mmap ret={}", partial);
+    ok &= partial > 0;
+    if partial > 0 {
+        let half = munmap(partial as u64, 4096);
+        println!("hello: sharedmmap partial munmap ret={}", half);
+        ok &= half == -22;
+        // 被拒的归还**没有**动到映射：这一页还能写
+        unsafe { core::ptr::write_volatile(partial as usize as *mut u8, 0x5C) };
+        let full = munmap(partial as u64, 8192);
+        println!("hello: sharedmmap partial cleanup ret={}", full);
+        ok &= full == 0;
+    }
+
+    // 10) 匿名映射上 `msync` 是合法但空操作（`pages=0 bytes=0`）
+    let anon = mmap(4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS);
+    println!("hello: sharedmmap anon mmap ret={}", anon);
+    ok &= anon > 0;
+    if anon > 0 {
+        let s = msync(anon as u64, 4096, MS_SYNC);
+        println!("hello: sharedmmap anon msync ret={}", s);
+        ok &= s == 0;
+        let un3 = munmap(anon as u64, 4096);
+        println!("hello: sharedmmap anon munmap ret={}", un3);
+        ok &= un3 == 0;
+    }
+
+    // 11) 窗口外的地址 → -22（页对齐、窗口、全段已映射三者缺一不可）
+    let bad = msync(0x0000_8000_0000_0000, 4096, MS_SYNC);
+    println!("hello: sharedmmap msync bad addr ret={}", bad);
+    ok &= bad == -22;
+
+    let _ = close(rwfd as i32);
+    println!("hello: sharedmmap PASS={}", ok as u8);
     ok
 }
 
